@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "PhotoFinish",
+          "version": "0.3.0-test",
+          "informationUri": "https://github.com/TroubieD3v/PhotoFinish",
+          "rules": [
+            {
+              "id": "PF001",
+              "name": "InvariantViolatedUnderConcurrency",
+              "shortDescription": {
+                "text": "A business rule broke when requests ran concurrently"
+              },
+              "fullDescription": {
+                "text": "PhotoFinish sent the same request several times in one synchronized race and the scenario's invariant evaluated to false afterwards in at least one trial. This is a proven race condition: the server let concurrent requests pass a check that each of them passes alone (a coupon applied twice, a balance spent twice, a one-time code accepted twice)."
+              },
+              "helpUri": "https://github.com/TroubieD3v/PhotoFinish#reports",
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "properties": {
+                "tags": [
+                  "security",
+                  "race-condition"
+                ],
+                "precision": "high",
+                "security-severity": "7.5"
+              }
+            },
+            {
+              "id": "PF002",
+              "name": "RaceTestInconclusive",
+              "shortDescription": {
+                "text": "A race test could not decide whether the business rule holds"
+              },
+              "fullDescription": {
+                "text": "At least half of the trials of the scenario could not be judged: race requests failed or got no response, responses arrived before the release (the endpoint did not wait for the request), the server rate limited the race, a setup step returned an unexpected status or the invariant could not be evaluated. Neither a violation nor a holding rule was shown."
+              },
+              "helpUri": "https://github.com/TroubieD3v/PhotoFinish#reports",
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "tags": [
+                  "race-condition"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "invocations": [
+        {
+          "executionSuccessful": false,
+          "startTimeUtc": "2026-11-02T10:00:00Z",
+          "endTimeUtc": "2026-11-02T10:00:06.002Z",
+          "toolExecutionNotifications": [
+            {
+              "level": "error",
+              "message": {
+                "text": "broken: invalid scenario: testdata/scenarios/broken.yaml:7: race.copies: must be between 1 and 1000, got 0\ntestdata/scenarios/broken.yaml:12: check.invariant: required <for every scenario> & \"quoted\""
+              },
+              "locations": [
+                {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "scenarios/broken.yaml",
+                      "uriBaseId": "%SRCROOT%"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "originalUriBaseIds": {
+        "%SRCROOT%": {
+          "uri": "file:///BASE/"
+        }
+      },
+      "results": [
+        {
+          "ruleId": "PF001",
+          "ruleIndex": 0,
+          "level": "error",
+          "message": {
+            "text": "1 of 3 trials broke the rule (h2, median response spread 0.32 ms). Failing in trial 1: size(check.json.discounts) <= 1 was 3 <= 1; size(race.filter(r, r.status == 200)) <= 1 was 3 <= 1."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "scenarios/coupon-vuln.yaml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 39
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "photofinish/v1": "a6d739732dade41c304d0d74f271b99c10190df44b023ab65356ed44e3e646c4"
+          },
+          "properties": {
+            "scenario": "coupon-vuln",
+            "target": "https://127.0.0.1:8443/vuln/api",
+            "engine": "h2",
+            "copies": 6,
+            "trials": 3,
+            "violated": 1,
+            "held": 1,
+            "inconclusive": 1,
+            "medianResponseSpreadNs": 320000,
+            "medianServerArrivalSpreadNs": 36000,
+            "explain": "A single-use coupon must apply at most once per cart."
+          }
+        },
+        {
+          "ruleId": "PF002",
+          "ruleIndex": 1,
+          "level": "warning",
+          "message": {
+            "text": "2 of 2 trials were inconclusive: rate limited: 4 of 6 race responses were 429."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "scenarios/transfer-limited.yaml",
+                  "uriBaseId": "%SRCROOT%"
+                },
+                "region": {
+                  "startLine": 33
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "photofinish/v1": "d1a28a781e7a8843dcce7c2a16dd88eaa3ba9feeba6fbac0f3c7d8dff5853ea6"
+          },
+          "properties": {
+            "scenario": "transfer-limited",
+            "target": "https://127.0.0.1:8443/vuln/api",
+            "engine": "h2",
+            "copies": 6,
+            "trials": 2,
+            "violated": 0,
+            "held": 0,
+            "inconclusive": 2,
+            "medianResponseSpreadNs": 375000,
+            "explain": "A balance must never go below zero; 100.00 covers one 60.00 transfer."
+          }
+        }
+      ]
+    }
+  ]
+}

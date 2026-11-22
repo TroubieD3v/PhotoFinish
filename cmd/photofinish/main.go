@@ -13,14 +13,20 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
 	"github.com/TroubieD3v/photofinish/internal/demo"
 )
 
-// version is overridden at release time: -ldflags "-X main.version=v1.2.3"
-var version = "0.0.0-dev"
+// devVersion is the version of a build that sets none.
+const devVersion = "0.0.0-dev"
+
+// version is overridden at release time: -ldflags "-X main.version=v1.2.3".
+// A binary built without it ("go install ...@v0.1.0") reports the module
+// version that the go command recorded, see moduleVersion.
+var version = devVersion
 
 // Exit codes shared by the commands. The run command returns the verdict codes
 // of runner.ExitCode instead: 0 HELD, 1 VIOLATED, 2 INCONCLUSIVE, 3 ERROR.
@@ -34,7 +40,8 @@ const usage = `PhotoFinish - proves race conditions in web APIs
 
 Usage:
   photofinish run <scenario.yaml>... [--engine auto|h2|h1|burst] [--trials N] [--copies N]
-                                     [--insecure] [--out DIR] [--format text|json] [--quiet]
+                                     [--insecure] [--format text|json|sarif|junit|html] [--output FILE]
+                                     [--out DIR] [--fail-on violated|inconclusive|never] [--quiet]
   photofinish probe <url> [--insecure]
   photofinish import <file> [--har-entry N] [--output scenario.yaml]
   photofinish demo [--addr 127.0.0.1:8443] [--window 0s] [--expose] [--quiet]
@@ -44,6 +51,8 @@ Usage:
 Commands:
   run       run scenarios: setup, a synchronized race and the invariant check,
             once per trial; exits 0 HELD, 1 VIOLATED, 2 INCONCLUSIVE, 3 ERROR
+            (--fail-on never: 0 unless ERROR); reports as text, JSON, SARIF,
+            JUnit XML or HTML
   probe     inspect a target (TLS, ALPN, HTTP/2 settings, round trips) and
             recommend an engine; sends three GET requests, no race traffic
   import    turn a raw HTTP request (Burp, DevTools) or a HAR file into a
@@ -69,7 +78,27 @@ Flags:
 `
 
 func main() {
+	if version == devVersion {
+		if v, ok := moduleVersion(debug.ReadBuildInfo()); ok {
+			version = v
+		}
+	}
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// moduleVersion returns the version of the main module that the go command
+// recorded in the binary: the resolved tag for "go install
+// ...@v0" ("v0.1.0"), a pseudo-version for a commit. ok is false for a
+// build without one ("(devel)").
+func moduleVersion(info *debug.BuildInfo, ok bool) (string, bool) {
+	if !ok || info == nil {
+		return "", false
+	}
+	v := info.Main.Version
+	if v == "" || v == "(devel)" {
+		return "", false
+	}
+	return v, true
 }
 
 // run executes the CLI with args (without the program name) and returns the

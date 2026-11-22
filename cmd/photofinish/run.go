@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -16,25 +18,74 @@ import (
 
 	"github.com/TroubieD3v/photofinish/internal/check"
 	"github.com/TroubieD3v/photofinish/internal/engine"
+	"github.com/TroubieD3v/photofinish/internal/report"
 	"github.com/TroubieD3v/photofinish/internal/runner"
 	"github.com/TroubieD3v/photofinish/internal/scenario"
 )
 
 const runUsage = `Usage: photofinish run <scenario.yaml>... [--engine auto|h2|h1|burst] [--trials N] [--copies N]
-                                          [--insecure] [--out DIR] [--format text|json] [--quiet]
+                                          [--insecure] [--format text|json|sarif|junit|html] [--output FILE]
+                                          [--out DIR] [--fail-on violated|inconclusive|never] [--quiet]
 
 Runs every scenario: for each trial the setup steps, the synchronized race and
 the check, then evaluates the invariant. Only hosts listed in scope.allow_hosts
 are contacted, within scope.budget.
 
-With --format json, stdout is one JSON report for one scenario file, or a JSON
-array of reports, in file order, for several.
+Output formats. With --format text (the default) stdout gets progress lines
+and a summary of every scenario. Any other format writes one document that
+covers all scenarios, in file order, to stdout or to --output FILE, and
+progress goes to stderr:
+  json   the full report: one JSON object for one scenario file, a JSON array
+         of reports for several
+  sarif  SARIF 2.1.0 for code scanning: a PF001 error per VIOLATED scenario, a
+         PF002 warning per INCONCLUSIVE one; scenario paths are relative to the
+         current directory
+  junit  JUnit XML for CI: a test suite per scenario, a test case per trial
+  html   one self-contained HTML page with the evidence of every scenario
 
-Exit code over all scenarios: 3 if any ERROR, else 1 if any VIOLATED, else 2 if
-any INCONCLUSIVE, else 0 (every scenario HELD). Usage errors exit 64.
+--out DIR writes DIR/<scenario-name>.json for every scenario and, covering all
+of them, DIR/report.html, DIR/results.sarif and DIR/junit.xml, whatever the
+format. With --out, sarif or junit the scenarios of one run need distinct
+names: report files, SARIF fingerprints and JUnit suites are keyed by name.
+Scenarios that an interruption (Ctrl+C) leaves unrun appear in the documents
+as ERROR.
+
+Exit code over all scenarios, depending on --fail-on:
+  violated      (default) 3 if any ERROR, else 1 if any VIOLATED, else 2 if
+                any INCONCLUSIVE, else 0 (every scenario HELD)
+  inconclusive  the same codes: an INCONCLUSIVE scenario already exits 2
+  never         0 whatever the verdicts, unless a scenario is ERROR (3)
+A report that cannot be written counts as ERROR. Usage errors exit 64.
 
 Flags:
 `
+
+// Values of --format.
+const (
+	formatText  = "text"
+	formatJSON  = "json"
+	formatSARIF = "sarif"
+	formatJUnit = "junit"
+	formatHTML  = "html"
+)
+
+// formats lists the values of --format.
+var formats = []string{formatText, formatJSON, formatSARIF, formatJUnit, formatHTML}
+
+// Values of --fail-on.
+const (
+	failOnViolated     = "violated"
+	failOnInconclusive = "inconclusive"
+	failOnNever        = "never"
+)
+
+// outFiles are the reports that --out DIR writes for all scenarios together,
+// besides the JSON report of every scenario.
+var outFiles = []struct{ name, format string }{
+	{"report.html", formatHTML},
+	{"results.sarif", formatSARIF},
+	{"junit.xml", formatJUnit},
+}
 
 // runOptions holds the parsed flags of the run command.
 type runOptions struct {
@@ -45,6 +96,8 @@ type runOptions struct {
 	insecure bool
 	out      string
 	format   string
+	output   string
+	failOn   string
 	quiet    bool
 }
 
@@ -57,8 +110,10 @@ func parseRun(args []string, stderr io.Writer) (runOptions, error) {
 	fs.IntVar(&o.trials, "trials", 0, "override the number of trials (0: the scenario's trials)")
 	fs.IntVar(&o.copies, "copies", 0, "override the number of race copies, 1 to 1000 (0: the scenario's copies)")
 	fs.BoolVar(&o.insecure, "insecure", false, "skip TLS certificate verification (like tls.insecure in the scenario)")
-	fs.StringVar(&o.out, "out", "", "write the JSON report of every scenario to `DIR`/<scenario-name>.json")
-	fs.StringVar(&o.format, "format", "text", "stdout format: text or json (the full report; an array of reports for several files)")
+	fs.StringVar(&o.out, "out", "", "write the JSON report of every scenario to `DIR`/<scenario-name>.json, plus DIR/report.html, DIR/results.sarif and DIR/junit.xml")
+	fs.StringVar(&o.format, "format", formatText, "output format: text, json, sarif, junit or html")
+	fs.StringVar(&o.output, "output", "", "write the json, sarif, junit or html document to `FILE` instead of stdout")
+	fs.StringVar(&o.failOn, "fail-on", failOnViolated, "verdicts that give a non-zero exit code: violated, inconclusive or never")
 	fs.BoolVar(&o.quiet, "quiet", false, "no progress lines; print only the summary of every scenario")
 	files, err := parseFlags(fs, args)
 	if err != nil {
@@ -78,10 +133,58 @@ func parseRun(args []string, stderr io.Writer) (runOptions, error) {
 		return o, fmt.Errorf("--trials must be between 1 and %d (0 keeps the scenario's value), got %d", scenario.MaxTrials, o.trials)
 	case o.copies < 0 || o.copies > scenario.MaxCopies:
 		return o, fmt.Errorf("--copies must be between 1 and %d (0 keeps the scenario's value), got %d", scenario.MaxCopies, o.copies)
-	case o.format != "text" && o.format != "json":
-		return o, fmt.Errorf("--format must be text or json, got %q", o.format)
+	case !slices.Contains(formats, o.format):
+		return o, fmt.Errorf("--format must be text, json, sarif, junit or html, got %q", o.format)
+	case o.failOn != failOnViolated && o.failOn != failOnInconclusive && o.failOn != failOnNever:
+		return o, fmt.Errorf("--fail-on must be violated, inconclusive or never, got %q", o.failOn)
+	case o.output != "" && o.format == formatText:
+		return o, errors.New("--output needs --format json, sarif, junit or html; the text summary always goes to stdout")
+	}
+	if o.output != "" {
+		if err := checkOutput(o); err != nil {
+			return o, err
+		}
 	}
 	return o, nil
+}
+
+// checkOutput rejects an --output FILE that would overwrite a scenario file,
+// or one of the --out DIR reports with a document of another format.
+func checkOutput(o runOptions) error {
+	for _, f := range o.files {
+		if samePath(o.output, f) {
+			return fmt.Errorf("--output %s would overwrite the scenario file %s", o.output, f)
+		}
+	}
+	if o.out == "" {
+		return nil
+	}
+	for _, of := range outFiles {
+		p := filepath.Join(o.out, of.name)
+		if of.format != o.format && samePath(o.output, p) {
+			return fmt.Errorf("--output %s is the %s report that --out %s writes; choose another file", o.output, of.format, o.out)
+		}
+	}
+	return nil
+}
+
+// samePath reports whether a and b name the same file: the same existing
+// file, or the same absolute path (ignoring case on Windows).
+func samePath(a, b string) bool {
+	if fa, err := os.Stat(a); err == nil {
+		if fb, err := os.Stat(b); err == nil {
+			return os.SameFile(fa, fb)
+		}
+	}
+	aa, err1 := filepath.Abs(a)
+	ab, err2 := filepath.Abs(b)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(aa, ab)
+	}
+	return aa == ab
 }
 
 // firstLine returns the first line of s.
@@ -95,33 +198,100 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 	if code, done := flagExit(err, stderr); done {
 		return code
 	}
+	if code, done := flagExit(checkNames(o), stderr); done {
+		return code
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return runScenarios(ctx, o, stdout, stderr)
 }
 
-// runScenarios runs every scenario file in order, prints the results and
-// returns the combined exit code.
-func runScenarios(ctx context.Context, o runOptions, stdout, stderr io.Writer) int {
-	if o.out != "" {
-		if err := os.MkdirAll(o.out, 0o755); err != nil {
-			fmt.Fprintln(stderr, "error:", err)
-			return runner.ExitCode(runner.Errored)
+// loadName returns the name of the scenario in file, or "" when the file
+// cannot be loaded (its report is then named after the file). Tests replace
+// it together with runScenario.
+var loadName = func(file string) string {
+	s, err := scenario.Load(file)
+	if err != nil {
+		return ""
+	}
+	return s.Name
+}
+
+// checkNames rejects, before any request, a run whose reports would collide:
+// two scenarios with the same name when the run writes --out DIR (one JSON
+// file per name), SARIF (fingerprints include the name) or JUnit (one suite
+// per name), and an --output FILE that is the JSON report of a scenario in
+// --out DIR.
+func checkNames(o runOptions) error {
+	if o.out == "" && o.format != formatSARIF && o.format != formatJUnit {
+		return nil
+	}
+	seen := map[string]string{} // report file name -> scenario file
+	for _, file := range o.files {
+		name := reportName(&runner.Report{Scenario: loadName(file)}, file)
+		key := name
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(name) // the file system ignores case
+		}
+		if prev, ok := seen[key]; ok {
+			return fmt.Errorf("%s and %s are both named %s; give the scenarios distinct names "+
+				"(report files, SARIF fingerprints and JUnit suites are keyed by name)",
+				prev, file, strings.TrimSuffix(name, ".json"))
+		}
+		seen[key] = file
+		if o.out != "" && o.output != "" && samePath(o.output, filepath.Join(o.out, name)) {
+			return fmt.Errorf("--output %s is the JSON report of %s that --out %s writes; choose another file", o.output, file, o.out)
 		}
 	}
+	return nil
+}
+
+// runScenario runs one scenario file; tests replace it to inject reports.
+var runScenario = runOne
+
+// runScenarios runs every scenario file in order, prints the results, writes
+// the requested reports and returns the exit code for o.failOn.
+func runScenarios(ctx context.Context, o runOptions, stdout, stderr io.Writer) int {
+	fail := func(err error) int {
+		fmt.Fprintln(stderr, "error:", err)
+		return runner.ExitCode(runner.Errored)
+	}
+	if o.out != "" {
+		if err := os.MkdirAll(o.out, 0o755); err != nil {
+			return fail(err)
+		}
+	}
+	// Open --output before the first request, so that a bad path does not
+	// cost a run.
+	var output *os.File
+	if o.output != "" {
+		f, err := os.OpenFile(o.output, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		if err != nil {
+			return fail(err)
+		}
+		defer f.Close()
+		output = f
+	}
+	text := o.format == formatText
+
 	var verdicts []runner.Verdict
-	var reports []*runner.Report   // for --format json
+	var reports []*runner.Report
 	written := map[string]string{} // report file -> scenario file
 	for i, file := range o.files {
 		if ctx.Err() != nil {
+			// The documents list the scenarios that did not run as ERROR,
+			// so that SARIF and JUnit consumers see a failed run.
 			fmt.Fprintf(stderr, "interrupted; %d of %d scenarios not run\n", len(o.files)-i, len(o.files))
-			verdicts = append(verdicts, runner.Errored)
+			for _, f := range o.files[i:] {
+				reports = append(reports, errorReport(f, errors.New("not run: the run was interrupted"), time.Now()))
+				verdicts = append(verdicts, runner.Errored)
+			}
 			break
 		}
-		if o.format == "text" && i > 0 {
+		if text && i > 0 {
 			fmt.Fprintln(stdout)
 		}
-		rep := runOne(ctx, file, o, stdout, stderr)
+		rep := runScenario(ctx, file, o, stdout, stderr)
 		verdict := rep.Verdict
 
 		var reportPath string
@@ -129,51 +299,160 @@ func runScenarios(ctx context.Context, o runOptions, stdout, stderr io.Writer) i
 			p, err := writeReport(o.out, rep, file, written)
 			if err != nil {
 				fmt.Fprintf(stderr, "error: %s: %v\n", file, err)
-				verdict = runner.Errored
+				failReport(rep, err)
+				verdict = rep.Verdict
 			}
 			reportPath = p
 		}
-
-		switch o.format {
-		case "json":
-			reports = append(reports, rep)
-		default:
+		if text {
 			writeSummary(stdout, rep)
 			if reportPath != "" {
 				fmt.Fprintf(stdout, "  report     %s\n", reportPath)
 			}
 		}
+		reports = append(reports, rep)
 		verdicts = append(verdicts, verdict)
 	}
-	if o.format == "json" && len(reports) > 0 {
-		// One document on stdout: the report itself for one file, an
-		// array for several, so that any JSON parser reads the output.
-		var doc any = reports
-		if len(o.files) == 1 {
-			doc = reports[0]
-		}
-		if err := encodeJSON(stdout, doc); err != nil {
+
+	if o.out != "" && len(reports) > 0 {
+		paths, err := writeOutFiles(o.out, reports, len(o.files))
+		if err != nil {
 			fmt.Fprintln(stderr, "error:", err)
 			verdicts = append(verdicts, runner.Errored)
 		}
+		if text && len(paths) > 0 {
+			fmt.Fprintf(stdout, "\nreports    %s\n", strings.Join(paths, ", "))
+		}
+	}
+	if !text && len(reports) > 0 {
+		var w io.Writer = stdout
+		if output != nil {
+			w = output
+		}
+		err := renderReports(w, o.format, reports, len(o.files))
+		if output != nil {
+			if cerr := output.Close(); err == nil {
+				err = cerr
+			}
+		}
+		if err != nil {
+			fmt.Fprintln(stderr, "error:", err)
+			verdicts = append(verdicts, runner.Errored)
+		}
+	}
+	return failOnExitCode(verdicts, o.failOn)
+}
+
+// failReport turns rep into an ERROR report because its JSON report could
+// not be written: the run cannot keep its evidence, and the documents of the
+// run (SARIF, JUnit, HTML) must say so, as the exit code does. The verdict
+// the trials reached stays in the summary.
+func failReport(rep *runner.Report, err error) {
+	msg := "the JSON report could not be written: " + err.Error()
+	switch {
+	case rep.Summary == "":
+	case rep.Verdict != runner.Errored:
+		msg += fmt.Sprintf("; the trials gave %s: %s", rep.Verdict, rep.Summary)
+	default:
+		msg += "; " + rep.Summary
+	}
+	rep.Verdict = runner.Errored
+	rep.Summary = msg
+}
+
+// renderReports writes reps as one document in format (json, sarif, junit or
+// html). files is the number of scenario files of the run: for several
+// files the JSON document is always an array, even if an interruption left
+// a single report.
+func renderReports(w io.Writer, format string, reps []*runner.Report, files int) error {
+	switch format {
+	case formatJSON:
+		if files > 1 && len(reps) == 1 {
+			return encodeJSON(w, reps)
+		}
+		return report.JSON(w, reps)
+	case formatSARIF:
+		base, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("SARIF base directory: %w", err)
+		}
+		return report.SARIF(w, reps, report.SARIFOptions{BaseDir: base})
+	case formatJUnit:
+		return report.JUnit(w, reps)
+	case formatHTML:
+		return report.HTML(w, reps)
+	default:
+		return fmt.Errorf("unknown report format %q", format)
+	}
+}
+
+// writeOutFiles writes the reports of outFiles to dir and returns the paths
+// written. Every file is rendered completely before it is written, so a
+// failing renderer does not leave half a report behind.
+func writeOutFiles(dir string, reps []*runner.Report, files int) ([]string, error) {
+	var paths []string
+	var errs []error
+	for _, of := range outFiles {
+		p := filepath.Join(dir, of.name)
+		var b bytes.Buffer
+		if err := renderReports(&b, of.format, reps, files); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", p, err))
+			continue
+		}
+		if err := os.WriteFile(p, b.Bytes(), 0o600); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		paths = append(paths, p)
+	}
+	return paths, errors.Join(errs...)
+}
+
+// failOnExitCode returns the exit code over all verdicts for the --fail-on
+// value: ERROR always gives 3; never turns every other verdict into 0;
+// violated and inconclusive both keep combinedExitCode, under which an
+// INCONCLUSIVE scenario already exits 2.
+func failOnExitCode(verdicts []runner.Verdict, failOn string) int {
+	if slices.Contains(verdicts, runner.Errored) {
+		return runner.ExitCode(runner.Errored)
+	}
+	if failOn == failOnNever {
+		return runner.ExitCode(runner.Held)
 	}
 	return combinedExitCode(verdicts)
 }
 
 // runOne loads and runs one scenario. It always returns a report: a scenario
 // that cannot be loaded or run yields a report with verdict ERROR and the
-// error in the summary.
+// error in the summary. With a format other than text the progress lines go
+// to stderr, framed by the scenario file and its verdict, so that stdout
+// stays a single document.
 func runOne(ctx context.Context, file string, o runOptions, stdout, stderr io.Writer) *runner.Report {
 	var progress io.Writer
 	switch {
 	case o.quiet:
-	case o.format == "json":
-		progress = stderr // keep stdout valid JSON
+	case o.format != formatText:
+		progress = stderr
 	default:
 		progress = stdout
-		fmt.Fprintf(stdout, "run %s\n", file)
 	}
+	if progress == nil {
+		return loadAndRun(ctx, file, o, nil)
+	}
+	fmt.Fprintf(progress, "run %s\n", file)
+	rep := loadAndRun(ctx, file, o, progress)
+	if o.format != formatText {
+		fmt.Fprintf(progress, "%s: %s\n", file, rep.Verdict)
+		if rep.Verdict == runner.Errored && rep.Summary != "" {
+			fmt.Fprintf(progress, "  %s\n", strings.ReplaceAll(strings.TrimRight(rep.Summary, "\n"), "\n", "\n  "))
+		}
+	}
+	return rep
+}
 
+// loadAndRun loads and runs one scenario, writing progress lines to progress
+// (nil disables them). It always returns a report, as runOne does.
+func loadAndRun(ctx context.Context, file string, o runOptions, progress io.Writer) *runner.Report {
 	started := time.Now()
 	s, err := scenario.Load(file)
 	if err != nil {

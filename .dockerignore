@@ -1,0 +1,21 @@
+# Only the Go sources are needed to build the image. Patterns without a slash
+# match at the top of the build context only.
+.git
+.github
+.tmp*
+tmp*
+bin
+dist
+reports
+photofinish
+*.exe
+*.log
+*.sarif
+*.html
+*.xml
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.idea
+.vscode

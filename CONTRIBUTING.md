@@ -35,3 +35,13 @@ The seed and `POST /<variant>/api/reset` must restore the state the scenario nee
 tables of `README.md` and `README.ru.md`, and add a line to `CHANGELOG.md`.
 
 SQLite errors must never reach a client: answer `500 {"error":"internal error"}` and log the detail.
+
+## Releasing
+
+1. Add a section `## [X.Y.Z]` to `CHANGELOG.md` (the release notes come from it; without it the release fails).
+2. Tag the commit `vX.Y.Z` (or `vX.Y.Z-rc.1` for a prerelease) and push the tag. Only tags of that form start
+   `.github/workflows/release.yml`.
+3. The workflow tests, builds the five archives and `checksums.txt`, smoke-tests the Linux binary against the demo,
+   publishes the release and the image `ghcr.io/troubied3v/photofinish`, and moves the major tag (`v0`) that
+   `uses: TroubieD3v/PhotoFinish@v0` follows to the new release. Prereleases and patches of an older minor version
+   leave the major tag alone. Do not push the major tag by hand.

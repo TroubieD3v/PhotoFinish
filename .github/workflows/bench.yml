@@ -1,0 +1,70 @@
+name: Benchmark
+
+# Compares the engines against the demo shop on a GitHub runner, first on plain
+# loopback and then with delay and jitter added to loopback by netem, which is
+# closer to a real network. Started by hand; the tables go to the job summary
+# and to an artifact.
+on:
+  workflow_dispatch:
+    inputs:
+      trials:
+        description: Trials per scenario and engine
+        default: "30"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      TRIALS: ${{ inputs.trials }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27"
+          cache: false
+      - run: go build -o bin/photofinish ./cmd/photofinish
+      - name: Start the demo shop
+        run: |
+          set -euo pipefail
+          ./bin/photofinish demo --quiet > demo.log 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -sk --http2 -o /dev/null https://127.0.0.1:8443/ && exit 0
+            sleep 1
+          done
+          cat demo.log
+          exit 1
+      - name: Loopback
+        run: bash bench/run.sh ./bin/photofinish out "1-loopback" "$TRIALS"
+      - name: Loopback with 1 ms ± 0.5 ms jitter
+        run: |
+          set -euo pipefail
+          sudo tc qdisc add dev lo root netem delay 1ms 500us distribution normal
+          bash bench/run.sh ./bin/photofinish out "2-jitter-1ms" "$TRIALS"
+          sudo tc qdisc del dev lo root
+      - name: Loopback with 5 ms ± 2 ms jitter
+        run: |
+          set -euo pipefail
+          sudo tc qdisc add dev lo root netem delay 5ms 2ms distribution normal
+          bash bench/run.sh ./bin/photofinish out "3-jitter-5ms" "$TRIALS"
+          sudo tc qdisc del dev lo root
+      - name: Tables
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "Runner: $(nproc) CPUs, $(uname -r), Go $(go env GOVERSION), $TRIALS trials, 20 copies"
+            echo
+            python3 bench/table.py out
+          } > bench.md
+          cat bench.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: benchmark
+          path: |
+            bench.md
+            out/

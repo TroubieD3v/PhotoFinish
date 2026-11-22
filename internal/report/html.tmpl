@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark light" />
+<meta name="generator" content="{{.Tool}}" />
+<title>PhotoFinish report: {{.Title}}</title>
+<style>
+:root {
+  --bg: #191b1e;
+  --chrome: #141619;
+  --panel: #1f2226;
+  --surface: #24272c;
+  --line: #2f333a;
+  --ink: #d5d7da;
+  --muted: #8d939a;
+  --ok: #94b08e;
+  --warn: #d0a866;
+  --bad: #d98577;
+  --accent: #8fb4d8;
+  --primary: #3e6489;
+  --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #eef0f2;
+    --chrome: #e4e7ea;
+    --panel: #f8f9fa;
+    --surface: #ffffff;
+    --line: #cdd3d9;
+    --ink: #1e2227;
+    --muted: #5b626a;
+    --ok: #4f7a49;
+    --warn: #8a6516;
+    --bad: #a4473a;
+    --accent: #2c5d8a;
+    --primary: #2c5d8a;
+    color-scheme: light;
+  }
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/1.45 var(--sans); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3 { margin: 0; font-weight: 600; }
+h1 { font-size: 14px; }
+h2 { font-size: 15px; }
+h3 { font-size: 13px; }
+pre, code, .mono { font-family: var(--mono); font-size: 12px; }
+pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.muted { color: var(--muted); }
+.bad { --c: var(--bad); }
+.ok { --c: var(--ok); }
+.warn { --c: var(--warn); }
+.err { --c: var(--bad); }
+.neutral { --c: var(--muted); }
+.loz { display: inline-block; min-width: 2.5em; padding: 0 6px; border: 1px solid var(--c); border-radius: 3px;
+  color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent);
+  font: 600 11px/18px var(--mono); text-align: center; white-space: nowrap; }
+.loz.err { border-style: dashed; }
+.topbar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--chrome);
+  border-bottom: 1px solid var(--line); }
+.topbar .mark { flex: none; width: 18px; height: 18px; }
+.topbar .mark rect { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+.topbar .mark line { stroke: var(--ink); stroke-width: 1.5; }
+.topbar .crumbs { color: var(--muted); }
+.topbar .crumbs strong { color: var(--ink); font-weight: 600; }
+.topbar .meta { margin-left: auto; color: var(--muted); font-family: var(--mono); font-size: 12px; }
+main { padding: 16px; display: grid; gap: 16px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; }
+.overview table { width: 100%; }
+table { border-collapse: collapse; }
+th { text-align: left; font-weight: 500; color: var(--muted); }
+th, td { padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+.section-head { display: flex; align-items: baseline; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.section-head .muted { overflow-wrap: anywhere; }
+.strip { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+.strip > div { padding: 10px 14px; border-right: 1px solid var(--line); }
+.strip > div:last-child { border-right: 0; }
+.strip .verdict { display: flex; gap: 10px; align-items: flex-start; flex: 1 1 320px; max-width: 640px; }
+.strip .verdict .loz { flex: none; }
+.strip .summary { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.strip .label { color: var(--muted); font-size: 12px; }
+.strip .value { font-family: var(--mono); font-size: 14px; white-space: nowrap; }
+.grid { display: grid; grid-template-columns: minmax(250px, 300px) minmax(0, 1fr) minmax(260px, 360px); }
+.grid > * { min-width: 0; }
+.col { border-right: 1px solid var(--line); }
+.col:last-child { border-right: 0; }
+.col h3 { padding: 10px 12px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.trials table { width: 100%; }
+.trials td { font-family: var(--mono); font-size: 12px; }
+.trials td:last-child { white-space: nowrap; }
+.trials tr.shown td { background: var(--surface); }
+.trials tr.shown td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+.legend { margin-left: auto; display: flex; gap: 12px; flex-wrap: wrap; font-weight: 400; font-size: 12px; color: var(--muted); }
+.legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 5px; background: var(--c); vertical-align: -1px; }
+.legend .rel::before { width: 0; height: 11px; border-left: 1px dashed var(--muted); background: none; }
+.legend .pre::before { display: none; }
+.legend .pre svg { display: inline-block; width: 9px; height: 9px; margin-right: 5px; vertical-align: -1px; }
+svg { display: block; width: 100%; height: auto; }
+svg text { font-family: var(--mono); font-size: 11px; }
+svg .tick, svg .lbl { fill: var(--muted); }
+svg .release { stroke: var(--muted); stroke-dasharray: 3 3; }
+svg .row-sep { stroke: var(--line); }
+svg .st { fill: var(--surface); stroke: var(--c); }
+svg .st.err { stroke-dasharray: 2 2; }
+svg .st-t { fill: var(--c); }
+svg .bar { fill: var(--c); fill-opacity: 0.45; }
+svg .end { stroke: var(--c); stroke-width: 2; }
+svg .hatch { fill: var(--muted); fill-opacity: 0.6; }
+svg .axis { stroke: var(--line); }
+svg .mark { stroke: var(--accent); stroke-width: 2; }
+.timeline-wrap { padding: 6px 8px 10px; overflow-x: auto; }
+.timeline-wrap svg { min-width: 560px; }
+.arrival { border-top: 1px solid var(--line); padding: 10px 12px; }
+.arrival-head { display: flex; gap: 10px; align-items: baseline; }
+.arrival-head h3 { padding: 0; border-bottom: 0; }
+.empty { padding: 16px 12px; color: var(--muted); }
+.block { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.block:last-child { border-bottom: 0; }
+.block h4 { margin: 0 0 8px; font-size: 12px; font-weight: 500; color: var(--muted); }
+.code { padding: 10px; background: var(--chrome); border: 1px solid var(--line); border-radius: 3px; }
+.code .comment { color: var(--muted); }
+.code.reproduce { overflow-x: auto; }
+.code.reproduce span { white-space: nowrap; }
+/* A long check body scrolls inside its block instead of stretching the page. */
+.code.body { max-height: 420px; overflow: auto; }
+@media print { .code.body { max-height: none; overflow: visible; } }
+.terms { width: 100%; }
+.terms td { padding: 5px 0; border: 0; }
+.terms td + td { padding-left: 10px; }
+.terms .expr { overflow-wrap: anywhere; }
+.terms .val { white-space: nowrap; text-align: right; color: var(--muted); }
+.terms tr.long-value td { padding-top: 0; }
+.terms .val.long { white-space: pre-wrap; overflow-wrap: anywhere; text-align: left; }
+.terms td:last-child { width: 1%; text-align: right; }
+ul.plain { margin: 0; padding-left: 18px; }
+ul.plain li { margin: 2px 0; overflow-wrap: anywhere; }
+.statusbar { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 7px 12px; border-top: 1px solid var(--line);
+  background: var(--chrome); color: var(--muted); font-size: 12px; border-radius: 0 0 4px 4px; }
+.page-foot { padding: 0 16px 20px; color: var(--muted); font-size: 12px; }
+@media (max-width: 1100px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .col { border-right: 0; border-bottom: 1px solid var(--line); }
+  .col:last-child { border-bottom: 0; }
+}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <svg class="mark" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="1" y="1" width="16" height="16" rx="3" /><line x1="9" y1="4" x2="9" y2="14" /></svg>
+  <h1>PhotoFinish</h1>
+  <span class="crumbs">Run report / <strong>{{.Title}}</strong></span>
+  <span class="meta">{{.Counts}}{{if .Started}} · {{.Started}}{{end}}</span>
+</header>
+<main>
+{{- if .Overview}}
+<section class="panel overview" aria-label="Scenarios">
+  <table>
+    <thead><tr><th>Scenario</th><th>Verdict</th><th>Summary</th></tr></thead>
+    <tbody>
+    {{- range .Scenarios}}
+      <tr><td><a href="#{{.ID}}">{{.Name}}</a></td><td><span class="loz {{.Class}}">{{.Verdict}}</span></td><td>{{.Summary}}</td></tr>
+    {{- end}}
+    </tbody>
+  </table>
+</section>
+{{- end}}
+{{- range .Scenarios}}
+{{- $s := .}}
+<section class="panel scenario" id="{{.ID}}">
+  <div class="section-head">
+    <h2>{{.Name}}</h2>
+    <span class="muted">{{.File}}{{if and .File .Target}} · {{end}}{{.Target}}</span>
+  </div>
+  <div class="strip">
+    <div class="verdict"><span class="loz {{.Class}}">{{.Verdict}}</span><p class="summary">{{.Summary}}</p></div>
+    {{- range .Metrics}}
+    <div><div class="label">{{.Label}}</div><div class="value">{{.Value}}</div></div>
+    {{- end}}
+  </div>
+  <div class="grid">
+    <div class="col trials">
+      <h3>Trials <span class="muted">{{len .Trials}}</span></h3>
+      {{- if .Trials}}
+      <table>
+        <thead><tr><th>#</th><th>Verdict</th><th>Statuses</th><th>Spread</th></tr></thead>
+        <tbody>
+        {{- range .Trials}}
+          <tr{{if .Shown}} class="shown"{{end}}><td>{{.Number}}</td><td><span class="loz {{.Class}}">{{.Verdict}}</span></td><td>{{.Statuses}}</td><td>{{.Spread}}</td></tr>
+        {{- end}}
+        </tbody>
+      </table>
+      {{- else}}
+      <p class="empty">No trial ran.</p>
+      {{- end}}
+    </div>
+    <div class="col center">
+      {{- with .Shown}}
+      <h3>{{.Caption}}
+        {{- with .Timeline}}
+        <span class="legend">
+          {{- range .Legend}}<span class="{{.Class}}">{{.Label}}</span>{{end -}}
+          {{- if .HasPre}}<span class="pre"><svg viewBox="0 0 9 9" aria-hidden="true"><rect width="9" height="9" fill="url(#hatch-{{$s.ID}})" /></svg>pre-sent</span>{{end -}}
+          <span class="rel">{{.LineLabel}}</span>
+        </span>
+        {{- end}}
+      </h3>
+      {{- with .Timeline}}
+      <div class="timeline-wrap">
+        <svg viewBox="0 0 {{.Width}} {{.Height}}" role="img" aria-label="Timeline of the race: one row per request, from release to the first response byte">
+          <defs><pattern id="hatch-{{$s.ID}}" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect class="hatch" width="1.2" height="4" /></pattern></defs>
+          {{- range .Ticks}}
+          <text class="tick" x="{{.X}}" y="14" text-anchor="middle">{{.Label}}</text>
+          {{- end}}
+          {{- range .Rows}}
+          <g class="{{.Class}}">
+            <title>{{.Title}}</title>
+            <text class="lbl" x="{{.LabelX}}" y="{{.TextY}}">{{.Label}}</text>
+            <rect class="st {{.Class}}" x="{{.StatusRectX}}" y="{{.StatusRectY}}" width="{{.StatusRectW}}" height="{{.StatusRectH}}" rx="2" />
+            <text class="st-t" x="{{.StatusTextX}}" y="{{.TextY}}" text-anchor="middle">{{.Status}}</text>
+            {{- if .HasPre}}
+            <rect x="{{.PreX}}" y="{{.BarY}}" width="{{.PreW}}" height="{{.BarH}}" fill="url(#hatch-{{$s.ID}})" />
+            {{- end}}
+            {{- if .HasBar}}
+            <rect class="bar" x="{{.BarX}}" y="{{.BarY}}" width="{{.BarW}}" height="{{.BarH}}" />
+            <line class="end" x1="{{.EndX}}" y1="{{.TickY1}}" x2="{{.EndX}}" y2="{{.TickY2}}" />
+            {{- end}}
+          </g>
+          {{- end}}
+          <line class="release" x1="{{.ReleaseX}}" y1="20" x2="{{.ReleaseX}}" y2="{{.Bottom}}" />
+        </svg>
+        {{- if .Hidden}}
+        <p class="muted">{{.Hidden}} more requests are not drawn.</p>
+        {{- end}}
+      </div>
+      {{- else}}
+      <p class="empty">This trial has no race.</p>
+      {{- end}}
+      {{- with .Arrival}}
+      {{- $a := .}}
+      <div class="arrival">
+        <div class="arrival-head"><h3>Server arrival</h3><span class="muted">{{.Count}} requests within {{.Spread}}, from the target's arrival header</span></div>
+        <svg viewBox="0 0 {{.Width}} {{.Height}}" role="img" aria-label="Server arrival times of the race requests">
+          <line class="axis" x1="0" y1="{{.MarkY2}}" x2="{{.Width}}" y2="{{.MarkY2}}" />
+          {{- range .Marks}}
+          <line class="mark" x1="{{.}}" y1="{{$a.MarkY1}}" x2="{{.}}" y2="{{$a.MarkY2}}" />
+          {{- end}}
+          {{- range .Ticks}}
+          <text class="tick" x="{{.X}}" y="{{$a.AxisY}}" text-anchor="middle">{{.Label}}</text>
+          {{- end}}
+        </svg>
+      </div>
+      {{- end}}
+      {{- else}}
+      <h3>Timeline</h3>
+      <p class="empty">No race ran.</p>
+      {{- end}}
+    </div>
+    <div class="col right">
+      {{- if .Invariant}}
+      <div class="block">
+        <h4>Invariant</h4>
+        <pre class="code">{{if .Explain}}<span class="comment">// {{.Explain}}</span>
+{{end}}{{.Invariant}}</pre>
+      </div>
+      {{- end}}
+      {{- with .Shown}}
+      {{- if .Terms}}
+      <div class="block">
+        <h4>Evaluated on trial {{.Number}}</h4>
+        <table class="terms">
+          {{- range .Terms}}
+          {{- if .Long}}
+          <tr><td class="expr mono" colspan="2">{{.Expr}}</td><td><span class="loz {{.Class}}">{{.State}}</span></td></tr>
+          <tr class="long-value"><td class="val long mono" colspan="3">{{.Value}}</td></tr>
+          {{- else}}
+          <tr><td class="expr mono">{{.Expr}}</td><td class="val mono">{{.Value}}</td><td><span class="loz {{.Class}}">{{.State}}</span></td></tr>
+          {{- end}}
+          {{- end}}
+        </table>
+      </div>
+      {{- end}}
+      {{- if .Reasons}}
+      <div class="block">
+        <h4>Reasons in trial {{.Number}}</h4>
+        <ul class="plain">
+          {{- range .Reasons}}
+          <li>{{.}}</li>
+          {{- end}}
+        </ul>
+      </div>
+      {{- end}}
+      {{- if .CheckLine}}
+      <div class="block">
+        <h4>Check · <span class="mono">{{.CheckLine}}</span></h4>
+        {{- if .CheckBody}}
+        <pre class="code body">{{.CheckBody}}</pre>
+        {{- if .Truncated}}
+        <p class="muted">Cut to the first 4 KB.</p>
+        {{- end}}
+        {{- end}}
+      </div>
+      {{- end}}
+      {{- end}}
+      {{- if .Notes}}
+      <div class="block">
+        <h4>Notes</h4>
+        <ul class="plain">
+          {{- range .Notes}}
+          <li>{{.}}</li>
+          {{- end}}
+        </ul>
+      </div>
+      {{- end}}
+      {{- if .Reproduce}}
+      <div class="block">
+        <h4>Reproduce</h4>
+        <pre class="code reproduce">{{range $i, $w := .Reproduce}}{{if $i}} {{end}}<span>{{$w}}</span>{{end}}</pre>
+      </div>
+      {{- end}}
+    </div>
+  </div>
+  {{- if .Footer}}
+  <div class="statusbar">
+    {{- range .Footer}}
+    <span>{{.}}</span>
+    {{- end}}
+  </div>
+  {{- end}}
+</section>
+{{- end}}
+</main>
+<footer class="page-foot">Generated by {{.Tool}}. Evidence is masked, but response bodies may still hold data to review before sharing. <a href="{{.ProjectURL}}">PhotoFinish</a></footer>
+</body>
+</html>

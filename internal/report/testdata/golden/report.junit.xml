@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="photofinish" tests="8" failures="1" errors="1" skipped="3" time="3.802">
+  <testsuite name="coupon-vuln" tests="3" failures="1" errors="0" skipped="1" time="1.500" timestamp="2026-11-02T10:00:00">
+    <properties>
+      <property name="verdict" value="VIOLATED"></property>
+      <property name="file" value="testdata/scenarios/coupon-vuln.yaml"></property>
+      <property name="target" value="https://127.0.0.1:8443/vuln/api"></property>
+      <property name="engine" value="h2"></property>
+      <property name="copies" value="6"></property>
+      <property name="invariant" value="size(check.json.discounts) &lt;= 1 &amp;&amp; size(race.filter(r, r.status == 200)) &lt;= 1"></property>
+      <property name="explain" value="A single-use coupon must apply at most once per cart."></property>
+      <property name="tool" value="photofinish 0.3.0-test"></property>
+      <property name="reproduce" value="photofinish run testdata/scenarios/coupon-vuln.yaml --engine h2 --trials 3"></property>
+    </properties>
+    <testcase classname="photofinish.coupon-vuln" name="trial 1" time="0.132">
+      <failure type="InvariantViolated" message="1 of 3 trials broke the rule (h2, median response spread 0.32 ms)">failing terms:&#xA;  size(check.json.discounts) &lt;= 1 was 3 &lt;= 1&#xA;  size(race.filter(r, r.status == 200)) &lt;= 1 was 3 &lt;= 1&#xA;responses: 3 x 200, 2 x 409, 1 x 429&#xA;note: 1 of 6 race responses were 429 without rate-limit headers; treated as application responses</failure>
+    </testcase>
+    <testcase classname="photofinish.coupon-vuln" name="trial 2" time="0.132"></testcase>
+    <testcase classname="photofinish.coupon-vuln" name="trial 3" time="0.132">
+      <skipped message="1 of 6 race requests got no response (stream reset by peer); note: failed over this imperfect race: size(check.json.discounts) &lt;= 1 was 2 &lt;= 1"></skipped>
+    </testcase>
+    <system-out>VIOLATED: 1 of 3 trials broke the rule (h2, median response spread 0.32 ms)&#xA;reproduce: photofinish run testdata/scenarios/coupon-vuln.yaml --engine h2 --trials 3</system-out>
+  </testsuite>
+  <testsuite name="coupon-fixed" tests="2" failures="0" errors="0" skipped="0" time="1.200" timestamp="2026-11-02T10:00:02">
+    <properties>
+      <property name="verdict" value="HELD"></property>
+      <property name="file" value="testdata/scenarios/coupon-fixed.yaml"></property>
+      <property name="target" value="http://127.0.0.1:8080/fixed/api"></property>
+      <property name="engine" value="h1"></property>
+      <property name="copies" value="4"></property>
+      <property name="invariant" value="size(check.json.discounts) &lt;= 1"></property>
+      <property name="tool" value="photofinish 0.3.0-test"></property>
+      <property name="reproduce" value="photofinish run testdata/scenarios/coupon-fixed.yaml --engine h1 --trials 2"></property>
+    </properties>
+    <testcase classname="photofinish.coupon-fixed" name="trial 1" time="0.126"></testcase>
+    <testcase classname="photofinish.coupon-fixed" name="trial 2" time="0.126"></testcase>
+    <system-out>HELD: not reproduced in 2 trials (h1, median response spread 0.21 ms); this is not proof of absence&#xA;reproduce: photofinish run testdata/scenarios/coupon-fixed.yaml --engine h1 --trials 2</system-out>
+  </testsuite>
+  <testsuite name="transfer-limited" tests="2" failures="0" errors="0" skipped="2" time="1.100" timestamp="2026-11-02T10:00:04">
+    <properties>
+      <property name="verdict" value="INCONCLUSIVE"></property>
+      <property name="file" value="testdata/scenarios/transfer-limited.yaml"></property>
+      <property name="target" value="https://127.0.0.1:8443/vuln/api"></property>
+      <property name="engine" value="h2"></property>
+      <property name="copies" value="6"></property>
+      <property name="invariant" value="check.json.balance_cents &gt;= 0 &amp;&amp; size(race.filter(r, r.status == 200)) &lt;= 1"></property>
+      <property name="explain" value="A balance must never go below zero; 100.00 covers one 60.00 transfer."></property>
+      <property name="tool" value="photofinish 0.3.0-test"></property>
+      <property name="reproduce" value="photofinish run testdata/scenarios/transfer-limited.yaml --engine h2 --trials 3"></property>
+    </properties>
+    <testcase classname="photofinish.transfer-limited" name="trial 1" time="0.126">
+      <skipped message="rate limited: 4 of 6 race responses were 429"></skipped>
+    </testcase>
+    <testcase classname="photofinish.transfer-limited" name="trial 2" time="0.126">
+      <skipped message="rate limited: 4 of 6 race responses were 429; invariant could not be evaluated: no such key: balance_cents"></skipped>
+    </testcase>
+    <system-out>INCONCLUSIVE: 2 of 2 trials were inconclusive: rate limited: 4 of 6 race responses were 429&#xA;note: 1 of 3 planned trials skipped: the request budget ran out&#xA;reproduce: photofinish run testdata/scenarios/transfer-limited.yaml --engine h2 --trials 3</system-out>
+  </testsuite>
+  <testsuite name="broken" tests="1" failures="0" errors="1" skipped="0" time="0.002" timestamp="2026-11-02T10:00:06">
+    <properties>
+      <property name="verdict" value="ERROR"></property>
+      <property name="file" value="testdata/scenarios/broken.yaml"></property>
+      <property name="engine" value="auto"></property>
+      <property name="tool" value="photofinish 0.3.0-test"></property>
+      <property name="reproduce" value="photofinish run testdata/scenarios/broken.yaml --engine auto"></property>
+    </properties>
+    <testcase classname="photofinish.broken" name="scenario" time="0.002">
+      <error type="ScenarioError" message="invalid scenario: testdata/scenarios/broken.yaml:7: race.copies: must be between 1 and 1000, got 0&#xA;testdata/scenarios/broken.yaml:12: check.invariant: required &lt;for every scenario&gt; &amp; &#34;quoted&#34;">invalid scenario: testdata/scenarios/broken.yaml:7: race.copies: must be between 1 and 1000, got 0&#xA;testdata/scenarios/broken.yaml:12: check.invariant: required &lt;for every scenario&gt; &amp; &#34;quoted&#34;</error>
+    </testcase>
+    <system-out>ERROR: invalid scenario: testdata/scenarios/broken.yaml:7: race.copies: must be between 1 and 1000, got 0&#xA;testdata/scenarios/broken.yaml:12: check.invariant: required &lt;for every scenario&gt; &amp; &#34;quoted&#34;&#xA;reproduce: photofinish run testdata/scenarios/broken.yaml --engine auto</system-out>
+  </testsuite>
+</testsuites>

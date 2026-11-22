@@ -5,7 +5,7 @@
 PhotoFinish proves race conditions in web APIs: synchronized requests via the HTTP/2 single-packet attack, a
 business rule you declare, and the evidence.
 
-Pre-alpha: M1-M2 — engines, scenarios and verdicts work; reports, UI and release arrive in M3-M5.
+Pre-alpha: M1-M3 — engines, scenarios, verdicts, reports, Docker and the GitHub Action work; the web UI and the first release arrive in M4-M5.
 
 > **Note**: test only systems you own or are explicitly authorized to test. The demo shop in this repository is
 > intentionally vulnerable and listens on loopback only. See [SECURITY.md](SECURITY.md).
@@ -14,7 +14,7 @@ Pre-alpha: M1-M2 — engines, scenarios and verdicts work; reports, UI and relea
 
 | Command | Does |
 |---|---|
-| `photofinish run <scenario.yaml>...` | runs scenarios: setup, a synchronized race, a check request and an invariant, repeated for every trial; prints a verdict and writes JSON evidence |
+| `photofinish run <scenario.yaml>...` | runs scenarios: setup, a synchronized race, a check request and an invariant, repeated for every trial; prints a verdict and writes the evidence as JSON, SARIF, JUnit and HTML |
 | `photofinish probe <url>` | inspects a target (TLS, ALPN, HTTP/2 settings, round trips, arrival header) and recommends an engine |
 | `photofinish import <file>` | turns a raw HTTP request (Burp, DevTools) or a HAR entry into a scenario skeleton |
 | `photofinish demo` | starts a shop over HTTPS with HTTP/2 whose four scenarios exist in a racy and a fixed variant |
@@ -80,12 +80,14 @@ coupon-vuln: VIOLATED
     FAIL  size(race.filter(r, r.status == 200)) <= 1    (3 <= 1)
   reproduce  photofinish run examples/coupon-vuln.yaml --engine h2 --trials 10 --copies 20
   report     reports/coupon-vuln.json
+
+reports    reports/report.html, reports/results.sarif, reports/junit.xml
 ```
 
 The exit code is 1 (VIOLATED). `reports/coupon-vuln.json` holds the evidence of every trial: the setup and check
 responses, every race response with its timestamps (pre-send, release, first byte, and the server arrival time
 from `X-Arrival-Ns`), the value of every term of the invariant, and the command that reproduces the run. Secrets
-are masked.
+are masked. `report.html`, `results.sarif` and `junit.xml` cover all scenarios of the run, see [Reports](#reports).
 
 Run the same race against the atomic variant and the verdict is HELD (exit code 0):
 
@@ -101,8 +103,10 @@ all four demo scenarios; `./bin/photofinish run examples/*.yaml` runs them all.
 | `--engine auto\|h2\|h1\|burst` | override `race.engine` |
 | `--trials N`, `--copies N` | override `trials` and `race.copies` |
 | `--insecure` | skip TLS certificate verification (like `tls.insecure`) |
-| `--out DIR` | write `DIR/<scenario-name>.json`, the full report |
-| `--format text\|json` | `json` prints the report to stdout instead of the text summary: one JSON object for one file, a JSON array of reports (in file order) for several; progress goes to stderr |
+| `--format text\|json\|sarif\|junit\|html` | `text` (default): progress and a summary on stdout. Any other format writes one document covering all scenarios to stdout (or `--output`) and moves progress to stderr; `json` is one object for one file, an array of reports (in file order) for several. See [Reports](#reports) |
+| `--output FILE` | write the `json`, `sarif`, `junit` or `html` document to `FILE` instead of stdout |
+| `--out DIR` | write `DIR/<scenario-name>.json` (the full report) for every scenario, and `DIR/report.html`, `DIR/results.sarif` and `DIR/junit.xml` for all of them, whatever `--format` is |
+| `--fail-on violated\|inconclusive\|never` | which verdicts fail the run, see the exit codes below (default `violated`) |
 | `--quiet` | no progress lines, only the summary |
 
 ### Exit codes
@@ -117,6 +121,12 @@ all four demo scenarios; `./bin/photofinish run examples/*.yaml` runs them all.
 
 With several scenarios `run` returns the most severe code: 3 before 1 before 2 before 0.
 
+`--fail-on` changes only the verdict codes: `violated` (the default) and `inconclusive` give the codes above, so an
+INCONCLUSIVE scenario already exits 2 under the default; `never` exits 0 whatever the verdicts, unless a scenario is
+ERROR (3), for pipelines that only collect reports. A report that cannot be written counts as ERROR, in the exit
+code and in the SARIF, JUnit and HTML documents of the run; so do the scenarios that an interruption (Ctrl+C) left
+unrun.
+
 A trial whose invariant evaluated to false over a clean race is VIOLATED. It is INCONCLUSIVE when the invariant
 could not be evaluated, a setup step answered an unexpected status, or the race was imperfect, whatever the
 invariant says: a race request failed or got no response, a response arrived before the release (the endpoint may
@@ -124,6 +134,167 @@ be static, or the request was not held), or the race was rate limited. Failing t
 notes. Any 429 in the race counts as rate limiting, unless the scenario sets `race.expect_429: true` to declare 429s
 the application's own answer (a 2FA lockout, say); even then a 429 with `Retry-After` or a `RateLimit` header, or a
 race in which every response is 429, is rate limiting. A scenario is VIOLATED if any trial was.
+
+## Reports
+
+One run, four formats. `--format` picks the document on stdout (or in `--output FILE`); `--out DIR` writes all of
+them at once:
+
+```bash
+./bin/photofinish run examples/*-vuln.yaml --out reports
+# reports/<scenario>.json, one per scenario, and for all of them
+# reports/results.sarif, reports/junit.xml and reports/report.html
+```
+
+| Format | For | Contents |
+|---|---|---|
+| `json` | archiving the evidence, your own tooling | the full report: every trial, every race response with its timestamps, the setup and check responses, the value of every term of the invariant, the reproduce command |
+| `sarif` | GitHub code scanning and other SARIF viewers | SARIF 2.1.0: one result per VIOLATED or INCONCLUSIVE scenario, located at the line of `check.invariant` in the scenario file |
+| `junit` | the test views of CI systems (GitHub, GitLab, Jenkins) | one test suite per scenario, one test case per trial |
+| `html` | a bug bounty or pentest report, a quick look | one self-contained page: verdict, trials, the timeline of a race, the invariant with its evaluated terms, the check response and the reproduce command |
+
+SARIF rules:
+
+| Rule | Name | Level | When |
+|---|---|---|---|
+| `PF001` | InvariantViolatedUnderConcurrency | `error` | the invariant failed in at least one trial: a proven race. Tagged `security` and `race-condition`, security severity 7.5 |
+| `PF002` | RaceTestInconclusive | `warning` | the run could not decide: failed or early responses, rate limiting, unexpected setup status |
+
+The message holds the summary and the failing terms of the first violated trial, for example
+`size(check.json.discounts) <= 1 was 3 <= 1`. Scenario paths are relative to the current directory (`%SRCROOT%`),
+so run from the repository root for code scanning to link the scenario file. HELD scenarios produce no result; an
+ERROR scenario becomes a tool execution notification, and the invocation is marked as not successful. Every result
+carries a `photofinish/v1` fingerprint of scenario name, target path and invariant, so an alert stays the same alert
+across runs, hosts (staging or a review app) and line moves. The scenario name is the identity: a run that writes
+SARIF, JUnit or `--out DIR` refuses two scenarios with the same name (exit code 64) before it sends a request, so
+copies of a scenario for several environments need distinct names.
+
+JUnit mapping:
+
+| Report | JUnit |
+|---|---|
+| run | `<testsuites name="photofinish">` |
+| scenario | `<testsuite name="<scenario>">` |
+| trial | `<testcase classname="photofinish.<scenario>" name="trial N">` |
+| VIOLATED trial | `<failure type="InvariantViolated">` with the failing terms and the response statuses |
+| INCONCLUSIVE trial | `<skipped>` with the reasons |
+| HELD trial | a passed test case |
+| ERROR scenario | one test case `scenario` with an `<error>` |
+
+The HTML report is a single file that loads nothing from the network (inline CSS and SVG, locally installed fonts),
+in a graphite palette with a light variant for `prefers-color-scheme: light`. For every scenario it shows a header
+strip (verdict, summary, copies, engine, final writes, median response and server arrival spread, requests spent),
+the trials table, the timeline of the first violated trial (one row per request: pre-send, release, first response
+byte; the server arrival times when the target sends them), the invariant with pass or fail per term, the check
+response and the reproduce command.
+
+*A screenshot of the HTML report follows in M5.*
+
+All formats are built from the same report, so secrets are masked in all of them, but response bodies are included.
+Review a report before you share it, see [SECURITY.md](SECURITY.md).
+
+## Use in CI
+
+The repository is a GitHub Action. It installs PhotoFinish with Go, runs the scenarios once, writes the SARIF, JUnit
+and HTML reports, adds a table (scenario, verdict, summary) to the job summary and fails the step under `fail-on`.
+Point it at a test or staging environment, never at production.
+
+```yaml
+name: Race tests
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+  security-events: write # only for the SARIF upload below
+
+jobs:
+  races:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - id: photofinish
+        uses: TroubieD3v/PhotoFinish@v0
+        env:
+          ALICE_TOKEN: ${{ secrets.STAGING_ALICE_TOKEN }} # read by the scenario as ${env:ALICE_TOKEN}
+        with:
+          scenarios: races/**/*.yaml
+      # Optional: alerts in code scanning (the Security tab) for VIOLATED and INCONCLUSIVE scenarios.
+      - uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('photofinish.sarif') != ''
+        with:
+          sarif_file: photofinish.sarif
+          category: photofinish
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: photofinish-report
+          path: |
+            photofinish-report.html
+            photofinish-junit.xml
+```
+
+The tag `v0` exists from the release v0.1.0 on and follows the newest v0.x.y release (the release workflow moves it);
+until then use `@main` or a commit SHA. The `security-events: write`
+permission and the `upload-sarif` step are only needed if you want alerts; on a private repository `upload-sarif`
+also needs `actions: read`.
+
+| Input | Default | Meaning |
+|---|---|---|
+| `scenarios` | (required) | scenario files separated by spaces or newlines; globs are expanded with bash `globstar` (`races/**/*.yaml`); a pattern that matches nothing fails the step |
+| `engine`, `trials`, `copies` | `""` | override the scenario values (`--engine`, `--trials`, `--copies`) |
+| `insecure` | `false` | `true` skips TLS certificate verification |
+| `fail-on` | `violated` | passed to `--fail-on`: `violated` and `inconclusive` fail on VIOLATED and INCONCLUSIVE, `never` only on ERROR |
+| `sarif` | `photofinish.sarif` | where to write the SARIF report; `""` skips it |
+| `junit` | `photofinish-junit.xml` | where to write the JUnit report; `""` skips it |
+| `html` | `photofinish-report.html` | where to write the HTML report; `""` skips it |
+| `version` | `""` | PhotoFinish version for `go install` (a tag, branch or commit); empty uses the ref of the action itself |
+
+| Output | Meaning |
+|---|---|
+| `verdict` | the worst verdict: `HELD`, `INCONCLUSIVE`, `VIOLATED` or `ERROR` |
+| `exit-code` | the exit code of `photofinish run` under `fail-on`; the action exits with it |
+| `report-dir` | the `--out` directory (under `RUNNER_TEMP`, a new one for every use of the action in a job) with the JSON report of every scenario |
+
+Secrets come from the `env:` of the step and are read by the scenario with `${env:NAME}`; the action never prints
+them, and the reports mask them. The action sets up Go 1.27 with `actions/setup-go`, which also applies to the later
+steps of the job. Used from a checkout of this repository (`uses: ./`) it builds that checkout instead of installing
+a release. To report without failing, set `fail-on: never` and read `steps.<id>.outputs.verdict`; to go on after a
+failure, use `continue-on-error: true`.
+
+Other CI systems run the binary or the Docker image directly: `photofinish run races/*.yaml --out reports` exits
+non-zero on VIOLATED and leaves `reports/junit.xml` for the test view.
+
+## Docker
+
+The image `ghcr.io/troubied3v/photofinish` (linux/amd64 and linux/arm64, published with every release from v0.1.0
+on) is distroless and runs as a non-root user; its entrypoint is `photofinish` and its working directory `/work`:
+
+```bash
+docker run --rm -v "$PWD:/work" ghcr.io/troubied3v/photofinish run scenario.yaml
+docker run --rm -e ALICE_TOKEN -v "$PWD:/work" ghcr.io/troubied3v/photofinish run scenario.yaml
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" ghcr.io/troubied3v/photofinish run scenario.yaml --out reports
+```
+
+The second line passes a secret from your environment; the third runs as your own user, so that the container can
+write the reports into the mounted directory. To build the image yourself:
+`docker build -t photofinish --build-arg VERSION=dev .`
+
+In a container the demo shop has to listen on all interfaces of the container, which needs `--expose`; publish it
+to the loopback of the host only:
+
+```bash
+docker run --rm -p 127.0.0.1:8443:8443 ghcr.io/troubied3v/photofinish demo --addr 0.0.0.0:8443 --expose
+```
+
+Inside another container `127.0.0.1` is that container itself. On Linux, run the scenarios with `--network host` to
+reach the shop on the loopback of the host:
+
+```bash
+docker run --rm --network host -v "$PWD/examples:/work/examples:ro" ghcr.io/troubied3v/photofinish run examples/coupon-fixed.yaml
+```
 
 ## Scenario format
 
@@ -246,7 +417,7 @@ The design, in Russian: [docs/DESIGN.ru.md](docs/DESIGN.ru.md).
 | **M0** | **repository, CI, the demo shop in two variants** | **`photofinish demo` starts, tests are green** |
 | M1 (partly done) | engines `h2` (single-packet), `h1` (last-byte sync), `burst`; the `probe` command | `h2` reliably catches the coupon race on `/vuln` (done); a benchmark measures the arrival spread of `h2` against `h1` and `burst` (not written yet; on loopback the hit rates of the three engines are similar) |
 | **M2** | **scenarios, CEL invariants, trials, verdicts, JSON evidence** | **`photofinish run examples/*.yaml` gives the right verdicts on `/vuln` and `/fixed`** |
-| M3 | SARIF, JUnit, HTML, Docker, GitHub Action | the Action fails a build against `/vuln` in a test repository |
+| **M3** | **SARIF, JUnit, HTML, Docker, GitHub Action** | **the Action fails a build against `/vuln` (the `action` job in CI)** |
 | M4 | web UI (Scenarios, Editor, Run, Reports) and `photofinish serve` | a scenario is built and run from the UI; the timeline shows the trials |
 | M5 | EN/RU documentation, screenshots, GIF, release v0.1.0, article | the release is published, a race lab is in WebSec-Lab |
 

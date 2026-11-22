@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   go:
     runs-on: ubuntu-latest
@@ -18,16 +22,19 @@ jobs:
           go-version-file: go.mod
       - name: gofmt
         run: |
+          set -euo pipefail
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then echo "gofmt needed on:"; echo "$unformatted"; exit 1; fi
       - run: go vet ./...
       - run: go test -race ./...
       - run: go build -o photofinish ./cmd/photofinish
+      - run: ./photofinish version
 
       # The README's quick start: start the demo shop, check that it speaks HTTP/2 over TLS,
       # and that the fixed coupon endpoint refuses a second application of the same code.
       - name: Demo smoke test
         run: |
+          set -euo pipefail
           ./photofinish demo --addr 127.0.0.1:18443 --quiet > demo.log 2>&1 &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true' EXIT
@@ -47,4 +54,225 @@ jobs:
           second=$(apply)
           echo "coupon on /fixed: first apply $first, second apply $second"
           if [ "$first" != "200" ] || [ "$second" != "409" ]; then cat demo.log; exit 1; fi
-          kill "$pid"
+
+  examples:
+    # Every example against the demo shop, with the exit codes and reports a
+    # pipeline would see.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go build -o photofinish ./cmd/photofinish
+
+      # --window 2ms, as in TestExamples: without the artificial pause the race
+      # in the /vuln handlers is real but only microseconds wide, and on a slow
+      # runner a -vuln example could miss it in all of its trials. The pause
+      # changes nothing for /fixed, whose handlers are atomic.
+      - name: Start the demo shop
+        run: |
+          set -euo pipefail
+          ./photofinish demo --window 2ms --quiet > demo.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 30); do
+            if curl -sk --http2 -o /dev/null https://127.0.0.1:8443/; then echo "demo shop ready after ${i}s"; exit 0; fi
+            if ! kill -0 "$pid" 2>/dev/null; then echo "the demo shop exited"; cat demo.log; exit 1; fi
+            sleep 1
+          done
+          echo "the demo shop was not ready within 30s"
+          cat demo.log
+          exit 1
+
+      - name: Fixed examples hold (exit code 0)
+        run: |
+          set -euo pipefail
+          set +e
+          ./photofinish run examples/*-fixed.yaml --out fixed-reports
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then echo "expected exit code 0 (every -fixed example HELD), got $code"; exit 1; fi
+
+      - name: Vulnerable examples are violated (exit code 1)
+        run: |
+          set -euo pipefail
+          set +e
+          ./photofinish run examples/*-vuln.yaml --format sarif --output vuln.sarif --out vuln-reports
+          code=$?
+          set -e
+          if [ "$code" -ne 1 ]; then echo "expected exit code 1 (VIOLATED), got $code"; exit 1; fi
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Reports are valid and complete
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet jsonschema
+          curl -fsSL -o sarif-schema.json https://json.schemastore.org/sarif-2.1.0.json
+          python scripts/check_reports.py --sarif vuln.sarif --schema sarif-schema.json --results 4 \
+            --junit vuln-reports/junit.xml --suites 4 --html vuln-reports/report.html
+
+      # Kept as an artifact, not uploaded to code scanning: the findings of the
+      # intentionally vulnerable demo must not become alerts of this repository.
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: example-reports
+          path: |
+            vuln.sarif
+            vuln-reports/
+          if-no-files-found: warn
+      - name: Demo shop log
+        if: failure()
+        run: cat demo.log || true
+
+  action:
+    # The composite action from this checkout, as a user's pipeline runs it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go build -o photofinish-demo ./cmd/photofinish
+
+      # --window 2ms for the same reason as in the examples job.
+      - name: Start the demo shop
+        run: |
+          set -euo pipefail
+          ./photofinish-demo demo --window 2ms --quiet > demo.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 30); do
+            if curl -sk --http2 -o /dev/null https://127.0.0.1:8443/; then echo "demo shop ready after ${i}s"; exit 0; fi
+            if ! kill -0 "$pid" 2>/dev/null; then echo "the demo shop exited"; cat demo.log; exit 1; fi
+            sleep 1
+          done
+          echo "the demo shop was not ready within 30s"
+          cat demo.log
+          exit 1
+
+      - name: Fixed examples pass
+        id: fixed
+        uses: ./
+        with:
+          scenarios: examples/*-fixed.yaml
+          insecure: "true"
+      - name: Check the outputs of the passing run
+        env:
+          VERDICT: ${{ steps.fixed.outputs.verdict }}
+          EXIT_CODE: ${{ steps.fixed.outputs.exit-code }}
+        run: |
+          set -euo pipefail
+          if [ "$VERDICT" != HELD ] || [ "$EXIT_CODE" != 0 ]; then
+            echo "expected HELD with exit code 0, got $VERDICT with $EXIT_CODE"; exit 1
+          fi
+          for f in photofinish.sarif photofinish-junit.xml photofinish-report.html; do
+            if [ ! -s "$f" ]; then echo "$f was not written"; exit 1; fi
+          done
+
+      - name: Vulnerable coupon fails the build
+        id: vuln
+        continue-on-error: true
+        uses: ./
+        with:
+          scenarios: examples/coupon-vuln.yaml
+          insecure: "true"
+          sarif: vuln/photofinish.sarif
+          junit: vuln/junit.xml
+          html: vuln/report.html
+      - name: Check that the action failed with VIOLATED
+        env:
+          OUTCOME: ${{ steps.vuln.outcome }}
+          VERDICT: ${{ steps.vuln.outputs.verdict }}
+          EXIT_CODE: ${{ steps.vuln.outputs.exit-code }}
+        run: |
+          set -euo pipefail
+          if [ "$OUTCOME" != failure ] || [ "$VERDICT" != VIOLATED ] || [ "$EXIT_CODE" != 1 ]; then
+            echo "expected a failure with VIOLATED and exit code 1, got $OUTCOME with $VERDICT and $EXIT_CODE"; exit 1
+          fi
+          for f in vuln/photofinish.sarif vuln/junit.xml vuln/report.html; do
+            if [ ! -s "$f" ]; then echo "$f was not written"; exit 1; fi
+          done
+
+      - name: fail-on never reports without failing
+        id: never
+        uses: ./
+        with:
+          scenarios: |
+            examples/coupon-vuln.yaml
+          insecure: "true"
+          fail-on: never
+          sarif: ""
+          junit: ""
+          html: ""
+      - name: Check the outputs of the report-only run
+        env:
+          VERDICT: ${{ steps.never.outputs.verdict }}
+          EXIT_CODE: ${{ steps.never.outputs.exit-code }}
+        run: |
+          set -euo pipefail
+          if [ "$VERDICT" != VIOLATED ] || [ "$EXIT_CODE" != 0 ]; then
+            echo "expected VIOLATED with exit code 0, got $VERDICT with $EXIT_CODE"; exit 1
+          fi
+      - name: Every use of the action keeps its own report-dir
+        env:
+          FIXED_DIR: ${{ steps.fixed.outputs.report-dir }}
+          NEVER_DIR: ${{ steps.never.outputs.report-dir }}
+        run: |
+          set -euo pipefail
+          if [ "$FIXED_DIR" = "$NEVER_DIR" ]; then echo "both uses wrote to $FIXED_DIR"; exit 1; fi
+          if [ ! -f "$FIXED_DIR/coupon-fixed.json" ] || [ -f "$FIXED_DIR/coupon-vuln.json" ]; then
+            echo "the report-dir of the first use does not hold its own reports:"; ls -l "$FIXED_DIR"; exit 1
+          fi
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: action-reports
+          path: |
+            photofinish.sarif
+            photofinish-junit.xml
+            photofinish-report.html
+            vuln/
+          if-no-files-found: warn
+      - name: Demo shop log
+        if: failure()
+        run: cat demo.log || true
+
+  docker:
+    # The README's Docker usage: build the image, run the demo shop in one
+    # container and a scenario in another.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t photofinish --build-arg VERSION=ci .
+      - name: Image runs as the CLI
+        run: |
+          set -euo pipefail
+          out=$(docker run --rm photofinish version)
+          echo "$out"
+          if [ "$out" != "photofinish ci" ]; then echo "expected \"photofinish ci\""; exit 1; fi
+          docker run --rm photofinish > /dev/null
+      - name: Start the demo shop in a container
+        run: |
+          set -euo pipefail
+          docker run -d --name pf-demo -p 127.0.0.1:8443:8443 photofinish demo --addr 0.0.0.0:8443 --expose --quiet
+          for i in $(seq 1 30); do
+            if curl -sk --http2 -o /dev/null https://127.0.0.1:8443/; then echo "demo shop ready after ${i}s"; exit 0; fi
+            if [ "$(docker inspect -f '{{.State.Running}}' pf-demo)" != true ]; then echo "the demo container exited"; docker logs pf-demo; exit 1; fi
+            sleep 1
+          done
+          echo "the demo shop was not ready within 30s"
+          docker logs pf-demo
+          exit 1
+      - name: Fixed coupon holds in a container (exit code 0)
+        run: |
+          set -euo pipefail
+          docker run --rm --network host -v "$PWD/examples:/work/examples:ro" photofinish run examples/coupon-fixed.yaml
+      - name: Demo container log
+        if: failure()
+        run: docker logs pf-demo || true
+      - name: Remove the demo container
+        if: always()
+        run: docker rm -f pf-demo > /dev/null 2>&1 || true

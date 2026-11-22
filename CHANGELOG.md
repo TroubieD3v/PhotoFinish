@@ -8,6 +8,38 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Milestone M3: reports, Docker, the GitHub Action and the release pipeline.
+- `internal/report`: every report as JSON, SARIF 2.1.0, JUnit XML and a self-contained HTML page. SARIF has the
+  rules `PF001` InvariantViolatedUnderConcurrency (error, a proven race) and `PF002` RaceTestInconclusive (warning),
+  one result per VIOLATED or INCONCLUSIVE scenario at the line of `check.invariant`, a stable `photofinish/v1`
+  fingerprint, and ERROR scenarios as tool execution notifications. JUnit has one test suite per scenario and one
+  test case per trial (VIOLATED is a failure, INCONCLUSIVE is skipped, a scenario ERROR is an error). The HTML page
+  loads nothing from the network and shows the verdict, the trials, the timeline of a race with the server arrival
+  times, the evaluated invariant, the check response and the reproduce command, in a graphite palette with a light
+  variant.
+- `photofinish run`: `--format text|json|sarif|junit|html`, `--output FILE`, and `--fail-on violated|inconclusive|never`
+  (default `violated`, the exit codes of M2; `never` exits 0 unless a scenario is ERROR). `--out DIR` also writes
+  `report.html`, `results.sarif` and `junit.xml` for all scenarios of the run. A run that writes SARIF, JUnit or
+  `--out` refuses two scenarios with the same name before any request (exit 64), as it refuses an `--output` that
+  is one of the `--out` reports. A JSON report that cannot be written and a scenario that Ctrl+C left unrun are
+  ERROR in every document of the run, as in the exit code.
+- `Dockerfile`: a static binary on `gcr.io/distroless/static-debian12:nonroot`, cross-compiled for the target
+  platform; entrypoint `photofinish`, working directory `/work`.
+- `action.yml`: a composite GitHub Action (`uses: TroubieD3v/PhotoFinish@<ref>`, or `uses: ./` from a checkout) with
+  the inputs `scenarios` (globstar patterns), `engine`, `trials`, `copies`, `insecure`, `fail-on`, `sarif`, `junit`,
+  `html` and `version`, a job summary table, and the outputs `verdict`, `exit-code` and `report-dir` (a new
+  directory for every use in a job). `verdict` is ERROR whenever the run exits 3, and a scenario without a report
+  gets an ERROR row in the summary. Installed with `go install`, the binary reports the resolved module version.
+- CI: `photofinish version` in the `go` job; an `examples` job that runs every example against the demo shop
+  (`-fixed` must exit 0, `-vuln` must exit 1) and checks the SARIF against the official schema, the JUnit XML and
+  the HTML report; an `action` job that runs the action from the checkout and expects it to pass on `-fixed`, fail
+  with VIOLATED on `coupon-vuln` and only report with `fail-on: never`; a `docker` job that builds the image and runs
+  a scenario in a container against the demo shop in another one. The demo findings stay artifacts and never reach
+  code scanning.
+- Release workflow for `vX.Y.Z` and `vX.Y.Z-*` tags: tests, binaries for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 and
+  windows/amd64 with README.md, README.ru.md and LICENSE, `checksums.txt`, a smoke test of the Linux binary against
+  the demo shop, release notes from this file, and the multi-arch image `ghcr.io/troubied3v/photofinish` tagged
+  `X.Y.Z`, `X.Y` and `latest`. A release moves the major tag (`v0`) to itself when it is the newest of that major.
 - Milestones M1-M2: the engines, scenarios, invariants and verdicts.
 - `internal/engine`: the `h2` engine (HTTP/2 single-packet attack on its own framer: every request is pre-sent
   without its last body byte or its empty final DATA frame, then the final frames of all streams leave in one

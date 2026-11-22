@@ -1,0 +1,1106 @@
+[
+  {
+    "schema": "photofinish.report/v1",
+    "tool": "photofinish 0.3.0-test",
+    "scenario": "coupon-vuln",
+    "file": "testdata/scenarios/coupon-vuln.yaml",
+    "target": "https://127.0.0.1:8443/vuln/api",
+    "engine": "h2",
+    "copies": 6,
+    "invariant": "size(check.json.discounts) <= 1 &&\nsize(race.filter(r, r.status == 200)) <= 1\n",
+    "explain": "A single-use coupon must apply at most once per cart.\n",
+    "verdict": "VIOLATED",
+    "summary": "1 of 3 trials broke the rule (h2, median response spread 0.32 ms)",
+    "trials": [
+      {
+        "number": 1,
+        "verdict": "VIOLATED",
+        "reasons": [
+          "size(check.json.discounts) <= 1 was 3 <= 1",
+          "size(race.filter(r, r.status == 200)) <= 1 was 3 <= 1",
+          "note: 1 of 6 race responses were 429 without rate-limit headers; treated as application responses"
+        ],
+        "setup": [
+          {
+            "id": "reset",
+            "method": "POST",
+            "url": "https://127.0.0.1:8443/vuln/api/reset",
+            "status": 200,
+            "body": "{\"ok\":true}",
+            "duration_ns": 3000000
+          },
+          {
+            "id": "cart",
+            "method": "POST",
+            "url": "https://127.0.0.1:8443/vuln/api/carts",
+            "status": 201,
+            "body": "{\"id\":\"c_81f2\"}",
+            "duration_ns": 2000000
+          }
+        ],
+        "race": {
+          "engine": "h2",
+          "target": "https://127.0.0.1:8443",
+          "alpn": "h2",
+          "tls_version": "TLS 1.3",
+          "connections": 1,
+          "warmup": 1,
+          "release": {
+            "writes": 1,
+            "bytes": 240,
+            "spread_ns": 0
+          },
+          "results": [
+            {
+              "index": 0,
+              "label": "copy 1",
+              "stream": 1,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 200,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613600100000000,
+              "released_ns": 1793613600200000000,
+              "first_byte_ns": 1793613600200410000,
+              "done_ns": 1793613600200440000,
+              "server_arrival_ns": 1793613600200020000
+            },
+            {
+              "index": 1,
+              "label": "copy 2",
+              "stream": 3,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 409,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613600100000000,
+              "released_ns": 1793613600200000000,
+              "first_byte_ns": 1793613600200520000,
+              "done_ns": 1793613600200550000,
+              "server_arrival_ns": 1793613600200022000
+            },
+            {
+              "index": 2,
+              "label": "copy 3",
+              "stream": 5,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 200,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613600100000000,
+              "released_ns": 1793613600200000000,
+              "first_byte_ns": 1793613600200380000,
+              "done_ns": 1793613600200410000,
+              "server_arrival_ns": 1793613600200025000
+            },
+            {
+              "index": 3,
+              "label": "copy 4",
+              "stream": 7,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 429,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613600100000000,
+              "released_ns": 1793613600200000000,
+              "first_byte_ns": 1793613600200610000,
+              "done_ns": 1793613600200640000,
+              "server_arrival_ns": 1793613600200031000
+            },
+            {
+              "index": 4,
+              "label": "copy 5",
+              "stream": 9,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 200,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613600100000000,
+              "released_ns": 1793613600200000000,
+              "first_byte_ns": 1793613600200450000,
+              "done_ns": 1793613600200480000,
+              "server_arrival_ns": 1793613600200036000
+            },
+            {
+              "index": 5,
+              "label": "copy 6",
+              "stream": 11,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 409,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613600100000000,
+              "released_ns": 1793613600200000000,
+              "first_byte_ns": 1793613600200700000,
+              "done_ns": 1793613600200730000,
+              "server_arrival_ns": 1793613600200058000
+            }
+          ],
+          "started_ns": 1793613600080000000,
+          "finished_ns": 1793613600205000000
+        },
+        "check": {
+          "method": "GET",
+          "url": "https://127.0.0.1:8443/vuln/api/carts/c_81f2",
+          "status": 200,
+          "body": "{\"id\":\"c_81f2\",\"total\":7.29,\"discounts\":[{\"code\":\"WELCOME10\",\"amount\":0.81},{\"code\":\"WELCOME10\",\"amount\":0.81},{\"code\":\"WELCOME10\",\"amount\":0.81}],\"note\":\"<script>alert(1)</script> & \\\"quoted\\\"\"}",
+          "duration_ns": 2000000
+        },
+        "terms": [
+          {
+            "expr": "size(check.json.discounts) <= 1",
+            "value": "3 <= 1",
+            "pass": false
+          },
+          {
+            "expr": "size(race.filter(r, r.status == 200)) <= 1",
+            "value": "3 <= 1",
+            "pass": false
+          }
+        ]
+      },
+      {
+        "number": 2,
+        "verdict": "HELD",
+        "setup": [
+          {
+            "id": "reset",
+            "method": "POST",
+            "url": "https://127.0.0.1:8443/vuln/api/reset",
+            "status": 200,
+            "body": "{\"ok\":true}",
+            "duration_ns": 3000000
+          },
+          {
+            "id": "cart",
+            "method": "POST",
+            "url": "https://127.0.0.1:8443/vuln/api/carts",
+            "status": 201,
+            "body": "{\"id\":\"c_81f2\"}",
+            "duration_ns": 2000000
+          }
+        ],
+        "race": {
+          "engine": "h2",
+          "target": "https://127.0.0.1:8443",
+          "alpn": "h2",
+          "tls_version": "TLS 1.3",
+          "connections": 1,
+          "warmup": 1,
+          "release": {
+            "writes": 1,
+            "bytes": 240,
+            "spread_ns": 0
+          },
+          "results": [
+            {
+              "index": 0,
+              "label": "copy 1",
+              "stream": 1,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 409,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613600500000000,
+              "released_ns": 1793613600600000000,
+              "first_byte_ns": 1793613600600400000,
+              "done_ns": 1793613600600430000,
+              "server_arrival_ns": 1793613600600018000
+            },
+            {
+              "index": 1,
+              "label": "copy 2",
+              "stream": 3,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 200,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613600500000000,
+              "released_ns": 1793613600600000000,
+              "first_byte_ns": 1793613600600330000,
+              "done_ns": 1793613600600360000,
+              "server_arrival_ns": 1793613600600020000
+            },
+            {
+              "index": 2,
+              "label": "copy 3",
+              "stream": 5,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 409,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613600500000000,
+              "released_ns": 1793613600600000000,
+              "first_byte_ns": 1793613600600520000,
+              "done_ns": 1793613600600550000,
+              "server_arrival_ns": 1793613600600029000
+            },
+            {
+              "index": 3,
+              "label": "copy 4",
+              "stream": 7,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 409,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613600500000000,
+              "released_ns": 1793613600600000000,
+              "first_byte_ns": 1793613600600470000,
+              "done_ns": 1793613600600500000,
+              "server_arrival_ns": 1793613600600033000
+            },
+            {
+              "index": 4,
+              "label": "copy 5",
+              "stream": 9,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 409,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613600500000000,
+              "released_ns": 1793613600600000000,
+              "first_byte_ns": 1793613600600650000,
+              "done_ns": 1793613600600680000,
+              "server_arrival_ns": 1793613600600035000
+            },
+            {
+              "index": 5,
+              "label": "copy 6",
+              "stream": 11,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 409,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613600500000000,
+              "released_ns": 1793613600600000000,
+              "first_byte_ns": 1793613600600610000,
+              "done_ns": 1793613600600640000,
+              "server_arrival_ns": 1793613600600040000
+            }
+          ],
+          "started_ns": 1793613600480000000,
+          "finished_ns": 1793613600605000000
+        },
+        "check": {
+          "method": "GET",
+          "url": "https://127.0.0.1:8443/vuln/api/carts/c_81f3",
+          "status": 200,
+          "body": "{\"id\":\"c_81f3\",\"discounts\":[{\"code\":\"WELCOME10\",\"amount\":0.81}]}",
+          "duration_ns": 2000000
+        },
+        "terms": [
+          {
+            "expr": "size(check.json.discounts) <= 1",
+            "value": "1 <= 1",
+            "pass": true
+          },
+          {
+            "expr": "size(race.filter(r, r.status == 200)) <= 1",
+            "value": "1 <= 1",
+            "pass": true
+          }
+        ]
+      },
+      {
+        "number": 3,
+        "verdict": "INCONCLUSIVE",
+        "reasons": [
+          "1 of 6 race requests got no response (stream reset by peer)",
+          "note: failed over this imperfect race: size(check.json.discounts) <= 1 was 2 <= 1"
+        ],
+        "setup": [
+          {
+            "id": "reset",
+            "method": "POST",
+            "url": "https://127.0.0.1:8443/vuln/api/reset",
+            "status": 200,
+            "body": "{\"ok\":true}",
+            "duration_ns": 3000000
+          },
+          {
+            "id": "cart",
+            "method": "POST",
+            "url": "https://127.0.0.1:8443/vuln/api/carts",
+            "status": 201,
+            "body": "{\"id\":\"c_81f2\"}",
+            "duration_ns": 2000000
+          }
+        ],
+        "race": {
+          "engine": "h2",
+          "target": "https://127.0.0.1:8443",
+          "alpn": "h2",
+          "tls_version": "TLS 1.3",
+          "connections": 1,
+          "warmup": 1,
+          "release": {
+            "writes": 1,
+            "bytes": 240,
+            "spread_ns": 0
+          },
+          "results": [
+            {
+              "index": 0,
+              "label": "copy 1",
+              "stream": 1,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 200,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613600900000000,
+              "released_ns": 1793613601000000000,
+              "first_byte_ns": 1793613601000300000,
+              "done_ns": 1793613601000330000,
+              "server_arrival_ns": 1793613601000015000
+            },
+            {
+              "index": 1,
+              "label": "copy 2",
+              "stream": 3,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 0,
+              "error": "stream reset by peer",
+              "pre_sent_ns": 1793613600900000000,
+              "released_ns": 1793613601000000000,
+              "first_byte_ns": 0,
+              "done_ns": 0
+            },
+            {
+              "index": 2,
+              "label": "copy 3",
+              "stream": 5,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 200,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613600900000000,
+              "released_ns": 1793613601000000000,
+              "first_byte_ns": 1793613601000420000,
+              "done_ns": 1793613601000450000,
+              "server_arrival_ns": 1793613601000019000
+            },
+            {
+              "index": 3,
+              "label": "copy 4",
+              "stream": 7,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 409,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613600900000000,
+              "released_ns": 1793613601000000000,
+              "first_byte_ns": 1793613601000510000,
+              "done_ns": 1793613601000540000,
+              "server_arrival_ns": 1793613601000027000
+            },
+            {
+              "index": 4,
+              "label": "copy 5",
+              "stream": 9,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 409,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613600900000000,
+              "released_ns": 1793613601000000000,
+              "first_byte_ns": 1793613601000560000,
+              "done_ns": 1793613601000590000,
+              "server_arrival_ns": 1793613601000030000
+            },
+            {
+              "index": 5,
+              "label": "copy 6",
+              "stream": 11,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 409,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613600900000000,
+              "released_ns": 1793613601000000000,
+              "first_byte_ns": 1793613601000590000,
+              "done_ns": 1793613601000620000,
+              "server_arrival_ns": 1793613601000052000
+            }
+          ],
+          "started_ns": 1793613600880000000,
+          "finished_ns": 1793613601005000000
+        },
+        "check": {
+          "method": "GET",
+          "url": "https://127.0.0.1:8443/vuln/api/carts/c_81f4",
+          "status": 200,
+          "body": "{\"id\":\"c_81f4\",\"discounts\":[{},{}]}",
+          "duration_ns": 2000000
+        },
+        "terms": [
+          {
+            "expr": "size(check.json.discounts) <= 1",
+            "value": "2 <= 1",
+            "pass": false
+          },
+          {
+            "expr": "size(race.filter(r, r.status == 200)) <= 1",
+            "value": "2 <= 1",
+            "pass": false
+          }
+        ]
+      }
+    ],
+    "stats": {
+      "planned": 3,
+      "ran": 3,
+      "violated": 1,
+      "held": 1,
+      "inconclusive": 1,
+      "median_response_spread_ns": 320000,
+      "median_server_arrival_spread_ns": 36000,
+      "requests_spent": 33
+    },
+    "started_at": "2026-11-02T10:00:00Z",
+    "finished_at": "2026-11-02T10:00:01.5Z",
+    "reproduce": "photofinish run testdata/scenarios/coupon-vuln.yaml --engine h2 --trials 3"
+  },
+  {
+    "schema": "photofinish.report/v1",
+    "tool": "photofinish 0.3.0-test",
+    "scenario": "coupon-fixed",
+    "file": "testdata/scenarios/coupon-fixed.yaml",
+    "target": "http://127.0.0.1:8080/fixed/api",
+    "engine": "h1",
+    "copies": 4,
+    "invariant": "size(check.json.discounts) <= 1",
+    "verdict": "HELD",
+    "summary": "not reproduced in 2 trials (h1, median response spread 0.21 ms); this is not proof of absence",
+    "trials": [
+      {
+        "number": 1,
+        "verdict": "HELD",
+        "setup": null,
+        "race": {
+          "engine": "h1",
+          "target": "https://127.0.0.1:8443",
+          "alpn": "http/1.1",
+          "tls_version": "TLS 1.3",
+          "connections": 4,
+          "warmup": 1,
+          "release": {
+            "writes": 4,
+            "bytes": 4,
+            "spread_ns": 12000
+          },
+          "results": [
+            {
+              "index": 0,
+              "label": "copy 1",
+              "conn": 0,
+              "proto": "HTTP/1.1",
+              "status": 200,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613601900000000,
+              "released_ns": 1793613602000000000,
+              "first_byte_ns": 1793613602000120000,
+              "done_ns": 1793613602000150000
+            },
+            {
+              "index": 1,
+              "label": "copy 2",
+              "conn": 1,
+              "proto": "HTTP/1.1",
+              "status": 409,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613601900000000,
+              "released_ns": 1793613602000002000,
+              "first_byte_ns": 1793613602000260000,
+              "done_ns": 1793613602000290000
+            },
+            {
+              "index": 2,
+              "label": "copy 3",
+              "conn": 2,
+              "proto": "HTTP/1.1",
+              "status": 409,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613601900000000,
+              "released_ns": 1793613602000004000,
+              "first_byte_ns": 1793613602000300000,
+              "done_ns": 1793613602000330000
+            },
+            {
+              "index": 3,
+              "label": "copy 4",
+              "conn": 3,
+              "proto": "HTTP/1.1",
+              "status": 409,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613601900000000,
+              "released_ns": 1793613602000006000,
+              "first_byte_ns": 1793613602000330000,
+              "done_ns": 1793613602000360000
+            }
+          ],
+          "started_ns": 1793613601880000000,
+          "finished_ns": 1793613602005000000
+        },
+        "check": {
+          "method": "GET",
+          "url": "http://127.0.0.1:8080/fixed/api/carts/c_9",
+          "status": 200,
+          "body": "plain text body",
+          "duration_ns": 1000000
+        },
+        "terms": [
+          {
+            "expr": "size(check.json.discounts) <= 1",
+            "value": "1 <= 1",
+            "pass": true
+          }
+        ]
+      },
+      {
+        "number": 2,
+        "verdict": "HELD",
+        "setup": null,
+        "race": {
+          "engine": "h1",
+          "target": "https://127.0.0.1:8443",
+          "alpn": "http/1.1",
+          "tls_version": "TLS 1.3",
+          "connections": 4,
+          "warmup": 1,
+          "release": {
+            "writes": 4,
+            "bytes": 4,
+            "spread_ns": 12000
+          },
+          "results": [
+            {
+              "index": 0,
+              "label": "copy 1",
+              "conn": 0,
+              "proto": "HTTP/1.1",
+              "status": 409,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613602900000000,
+              "released_ns": 1793613603000000000,
+              "first_byte_ns": 1793613603000180000,
+              "done_ns": 1793613603000210000
+            },
+            {
+              "index": 1,
+              "label": "copy 2",
+              "conn": 1,
+              "proto": "HTTP/1.1",
+              "status": 200,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613602900000000,
+              "released_ns": 1793613603000002000,
+              "first_byte_ns": 1793613603000140000,
+              "done_ns": 1793613603000170000
+            },
+            {
+              "index": 2,
+              "label": "copy 3",
+              "conn": 2,
+              "proto": "HTTP/1.1",
+              "status": 409,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613602900000000,
+              "released_ns": 1793613603000004000,
+              "first_byte_ns": 1793613603000350000,
+              "done_ns": 1793613603000380000
+            },
+            {
+              "index": 3,
+              "label": "copy 4",
+              "conn": 3,
+              "proto": "HTTP/1.1",
+              "status": 409,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613602900000000,
+              "released_ns": 1793613603000006000,
+              "first_byte_ns": 1793613603000360000,
+              "done_ns": 1793613603000390000
+            }
+          ],
+          "started_ns": 1793613602880000000,
+          "finished_ns": 1793613603005000000
+        },
+        "check": {
+          "method": "GET",
+          "url": "http://127.0.0.1:8080/fixed/api/carts/c_10",
+          "status": 200,
+          "body": "{\"discounts\":[1]}",
+          "duration_ns": 1000000
+        },
+        "terms": [
+          {
+            "expr": "size(check.json.discounts) <= 1",
+            "value": "1 <= 1",
+            "pass": true
+          }
+        ]
+      }
+    ],
+    "stats": {
+      "planned": 2,
+      "ran": 2,
+      "violated": 0,
+      "held": 2,
+      "inconclusive": 0,
+      "median_response_spread_ns": 210000,
+      "requests_spent": 10
+    },
+    "started_at": "2026-11-02T10:00:02Z",
+    "finished_at": "2026-11-02T10:00:03.2Z",
+    "reproduce": "photofinish run testdata/scenarios/coupon-fixed.yaml --engine h1 --trials 2"
+  },
+  {
+    "schema": "photofinish.report/v1",
+    "tool": "photofinish 0.3.0-test",
+    "scenario": "transfer-limited",
+    "file": "testdata/scenarios/transfer-limited.yaml",
+    "target": "https://127.0.0.1:8443/vuln/api",
+    "engine": "h2",
+    "copies": 6,
+    "invariant": "check.json.balance_cents >= 0 &&\nsize(race.filter(r, r.status == 200)) <= 1\n",
+    "explain": "A balance must never go below zero; 100.00 covers one 60.00 transfer.",
+    "verdict": "INCONCLUSIVE",
+    "summary": "2 of 2 trials were inconclusive: rate limited: 4 of 6 race responses were 429",
+    "notes": [
+      "1 of 3 planned trials skipped: the request budget ran out"
+    ],
+    "trials": [
+      {
+        "number": 1,
+        "verdict": "INCONCLUSIVE",
+        "reasons": [
+          "rate limited: 4 of 6 race responses were 429"
+        ],
+        "setup": null,
+        "race": {
+          "engine": "h2",
+          "target": "https://127.0.0.1:8443",
+          "alpn": "h2",
+          "tls_version": "TLS 1.3",
+          "connections": 1,
+          "warmup": 1,
+          "release": {
+            "writes": 1,
+            "bytes": 240,
+            "spread_ns": 0
+          },
+          "results": [
+            {
+              "index": 0,
+              "label": "copy 1",
+              "stream": 1,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 200,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613603900000000,
+              "released_ns": 1793613604000000000,
+              "first_byte_ns": 1793613604000350000,
+              "done_ns": 1793613604000380000
+            },
+            {
+              "index": 1,
+              "label": "copy 2",
+              "stream": 3,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 429,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613603900000000,
+              "released_ns": 1793613604000000000,
+              "first_byte_ns": 1793613604000090000,
+              "done_ns": 1793613604000120000
+            },
+            {
+              "index": 2,
+              "label": "copy 3",
+              "stream": 5,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 429,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613603900000000,
+              "released_ns": 1793613604000000000,
+              "first_byte_ns": 1793613604000095000,
+              "done_ns": 1793613604000125000
+            },
+            {
+              "index": 3,
+              "label": "copy 4",
+              "stream": 7,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 429,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613603900000000,
+              "released_ns": 1793613604000000000,
+              "first_byte_ns": 1793613604000110000,
+              "done_ns": 1793613604000140000
+            },
+            {
+              "index": 4,
+              "label": "copy 5",
+              "stream": 9,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 429,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613603900000000,
+              "released_ns": 1793613604000000000,
+              "first_byte_ns": 1793613604000120000,
+              "done_ns": 1793613604000150000
+            },
+            {
+              "index": 5,
+              "label": "copy 6",
+              "stream": 11,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 409,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613603900000000,
+              "released_ns": 1793613604000000000,
+              "first_byte_ns": 1793613604000480000,
+              "done_ns": 1793613604000510000
+            }
+          ],
+          "started_ns": 1793613603880000000,
+          "finished_ns": 1793613604005000000
+        },
+        "check": {
+          "method": "GET",
+          "url": "https://127.0.0.1:8443/vuln/api/me",
+          "status": 200,
+          "body": "{\"balance_cents\":4000}",
+          "duration_ns": 1000000
+        },
+        "terms": [
+          {
+            "expr": "check.json.balance_cents >= 0",
+            "value": "4000 >= 0",
+            "pass": true
+          },
+          {
+            "expr": "size(race.filter(r, r.status == 200)) <= 1",
+            "value": "1 <= 1",
+            "pass": true
+          }
+        ]
+      },
+      {
+        "number": 2,
+        "verdict": "INCONCLUSIVE",
+        "reasons": [
+          "rate limited: 4 of 6 race responses were 429",
+          "invariant could not be evaluated: no such key: balance_cents"
+        ],
+        "setup": null,
+        "race": {
+          "engine": "h2",
+          "target": "https://127.0.0.1:8443",
+          "alpn": "h2",
+          "tls_version": "TLS 1.3",
+          "connections": 1,
+          "warmup": 1,
+          "release": {
+            "writes": 1,
+            "bytes": 240,
+            "spread_ns": 0
+          },
+          "results": [
+            {
+              "index": 0,
+              "label": "copy 1",
+              "stream": 1,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 429,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613604900000000,
+              "released_ns": 1793613605000000000,
+              "first_byte_ns": 1793613605000080000,
+              "done_ns": 1793613605000110000
+            },
+            {
+              "index": 1,
+              "label": "copy 2",
+              "stream": 3,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 429,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613604900000000,
+              "released_ns": 1793613605000000000,
+              "first_byte_ns": 1793613605000085000,
+              "done_ns": 1793613605000115000
+            },
+            {
+              "index": 2,
+              "label": "copy 3",
+              "stream": 5,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 200,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613604900000000,
+              "released_ns": 1793613605000000000,
+              "first_byte_ns": 1793613605000300000,
+              "done_ns": 1793613605000330000
+            },
+            {
+              "index": 3,
+              "label": "copy 4",
+              "stream": 7,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 429,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613604900000000,
+              "released_ns": 1793613605000000000,
+              "first_byte_ns": 1793613605000100000,
+              "done_ns": 1793613605000130000
+            },
+            {
+              "index": 4,
+              "label": "copy 5",
+              "stream": 9,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 429,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613604900000000,
+              "released_ns": 1793613605000000000,
+              "first_byte_ns": 1793613605000105000,
+              "done_ns": 1793613605000135000
+            },
+            {
+              "index": 5,
+              "label": "copy 6",
+              "stream": 11,
+              "conn": 0,
+              "proto": "HTTP/2.0",
+              "status": 409,
+              "header": {
+                "Content-Type": [
+                  "application/json"
+                ]
+              },
+              "pre_sent_ns": 1793613604900000000,
+              "released_ns": 1793613605000000000,
+              "first_byte_ns": 1793613605000420000,
+              "done_ns": 1793613605000450000
+            }
+          ],
+          "started_ns": 1793613604880000000,
+          "finished_ns": 1793613605005000000
+        },
+        "check": {
+          "method": "GET",
+          "url": "https://127.0.0.1:8443/vuln/api/me",
+          "status": 503,
+          "duration_ns": 1000000
+        },
+        "terms": [
+          {
+            "expr": "check.json.balance_cents >= 0",
+            "value": "error: no such key: balance_cents",
+            "pass": null
+          },
+          {
+            "expr": "size(race.filter(r, r.status == 200)) <= 1",
+            "value": "1 <= 1",
+            "pass": true
+          }
+        ]
+      }
+    ],
+    "stats": {
+      "planned": 3,
+      "ran": 2,
+      "violated": 0,
+      "held": 0,
+      "inconclusive": 2,
+      "skipped": 1,
+      "median_response_spread_ns": 375000,
+      "requests_spent": 14
+    },
+    "started_at": "2026-11-02T10:00:04Z",
+    "finished_at": "2026-11-02T10:00:05.1Z",
+    "reproduce": "photofinish run testdata/scenarios/transfer-limited.yaml --engine h2 --trials 3"
+  },
+  {
+    "schema": "photofinish.report/v1",
+    "tool": "photofinish 0.3.0-test",
+    "scenario": "",
+    "file": "testdata/scenarios/broken.yaml",
+    "target": "",
+    "engine": "auto",
+    "copies": 0,
+    "invariant": "",
+    "verdict": "ERROR",
+    "summary": "invalid scenario: testdata/scenarios/broken.yaml:7: race.copies: must be between 1 and 1000, got 0\ntestdata/scenarios/broken.yaml:12: check.invariant: required <for every scenario> & \"quoted\"",
+    "trials": [],
+    "stats": {
+      "planned": 0,
+      "ran": 0,
+      "violated": 0,
+      "held": 0,
+      "inconclusive": 0,
+      "median_response_spread_ns": 0,
+      "requests_spent": 0
+    },
+    "started_at": "2026-11-02T10:00:06Z",
+    "finished_at": "2026-11-02T10:00:06.002Z",
+    "reproduce": "photofinish run testdata/scenarios/broken.yaml --engine auto"
+  }
+]

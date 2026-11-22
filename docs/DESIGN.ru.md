@@ -2,7 +2,7 @@
 
 > **PhotoFinish** proves race conditions in web APIs: it fires synchronized requests with the HTTP/2 single-packet attack, checks a business rule you declare, and keeps the evidence. One binary, CLI + web UI + CI.
 
-Статус: дизайн от 22.11.2026. Готовы этапы M0–M2: демо-магазин, движки, сценарии, инварианты и вердикты (команды `run`, `probe`, `import`, `demo`). Отчёты SARIF/JUnit/HTML, интерфейс и релиз — этапы M3–M5.
+Статус: дизайн от 22.11.2026. Готовы этапы M0–M3: демо-магазин, движки, сценарии, инварианты и вердикты (команды `run`, `probe`, `import`, `demo`), отчёты JSON/SARIF/JUnit/HTML, Docker-образ, GitHub Action и конвейер релиза. Веб-интерфейс и первый релиз — этапы M4–M5.
 
 ---
 
@@ -183,11 +183,13 @@ reset:
 - Значения переменных и итог вычисления инварианта по шагам.
 - Готовая команда воспроизведения: `photofinish run` с тем же сценарием, движком, числом попыток и копий.
 
-**Форматы отчётов:**
+**Форматы отчётов** (пакет `internal/report`, все строятся из одного `runner.Report`, поэтому маскировка одна на всех):
 - JSON — полный пакет доказательств;
-- HTML — для отчёта по баг-баунти;
-- SARIF — для GitHub code scanning;
-- JUnit — для CI.
+- HTML — для отчёта по баг-баунти: один самодостаточный файл без внешних запросов (встроенные CSS и SVG, системные шрифты), графитовая палитра со светлым вариантом; полоса статуса, таблица попыток, таймлайн первой попытки с нарушением и полоса прихода на сервер, инвариант по частям, ответ проверки, команда воспроизведения;
+- SARIF 2.1.0 — для GitHub code scanning: правило `PF001` InvariantViolatedUnderConcurrency (error, security severity 7.5) на каждый сценарий VIOLATED и `PF002` RaceTestInconclusive (warning) на каждый INCONCLUSIVE, привязка к строке `check.invariant`, отпечаток `photofinish/v1`; сценарии ERROR — уведомления о выполнении, HELD — без результатов;
+- JUnit — для CI: набор тестов на сценарий, тест на попытку; VIOLATED — `failure`, INCONCLUSIVE — `skipped`, ERROR сценария — `error`.
+
+`run --out DIR` пишет JSON каждого сценария и общие `report.html`, `results.sarif`, `junit.xml`; `--format` с `--output FILE` выводит один документ по всем сценариям.
 
 ## 9. Интерфейсы
 
@@ -195,7 +197,8 @@ reset:
 
 ```
 photofinish run scenario.yaml... [--engine h2] [--trials 20] [--copies 20] [--insecure]
-                                 [--out report/] [--format text|json] [--quiet]
+                                 [--out report/] [--format text|json|sarif|junit|html] [--output FILE]
+                                 [--fail-on violated|inconclusive|never] [--quiet]
 photofinish probe https://host/path [--insecure]   # TLS, ALPN, SETTINGS HTTP/2, RTT, заголовок прихода
 photofinish import burp.txt|file.har [--har-entry N] [--output scenario.yaml]
 photofinish serve                        # веб-интерфейс на 127.0.0.1:8080 (этап M4)
@@ -222,8 +225,15 @@ photofinish demo                         # уязвимый магазин на 
 
 ### CI
 
-- GitHub Action `TroubieD3v/PhotoFinish@v0` с входами `scenarios`, `engine`, `trials` и загрузкой SARIF.
-- Docker-образ `ghcr.io/troubied3v/photofinish`, distroless, без root.
+- **GitHub Action** `TroubieD3v/PhotoFinish@v0` (тег появится с v0.1.0), составной (`action.yml` в корне):
+  - входы `scenarios` (пути и шаблоны через пробел или с новой строки, раскрываются bash с `globstar`), `engine`, `trials`, `copies`, `insecure`, `fail-on`, `sarif`, `junit`, `html`, `version`;
+  - ставит Go через `actions/setup-go`, затем `go install ...@<version или ref самого action>`; при `uses: ./` собирает checkout;
+  - один прогон с `--out` во временный каталог, копирует SARIF, JUnit и HTML по путям из входов, пишет таблицу «сценарий | вердикт | итог» в сводку задания;
+  - выходы `verdict` (самый серьёзный вердикт), `exit-code`, `report-dir`; последний шаг завершается с кодом по правилу `fail-on`;
+  - загрузку SARIF в code scanning пользователь добавляет сам (`github/codeql-action/upload-sarif`, право `security-events: write`).
+- **Docker-образ** `ghcr.io/troubied3v/photofinish`: distroless `static-debian12:nonroot`, без root, `ENTRYPOINT ["photofinish"]`, рабочий каталог `/work`; многоплатформенный (linux/amd64, linux/arm64), сборка кросс-компиляцией без эмуляции. Демо в контейнере: `demo --addr 0.0.0.0:8443 --expose` с публикацией `-p 127.0.0.1:8443:8443`.
+- **CI самого проекта:** задания `go` (gofmt, vet, `test -race`, сборка, `version`, smoke-тест демо), `examples` (все примеры против демо: `-fixed` дают 0, `-vuln` дают 1, SARIF проверяется по официальной схеме, JUnit и HTML разбираются), `action` (action из checkout проходит на `-fixed`, падает с VIOLATED на `coupon-vuln`, с `fail-on: never` только отчитывается), `docker` (сборка образа, демо и сценарий в контейнерах). Находки демо остаются артефактами и не попадают в code scanning репозитория.
+- **Релиз** по тегу версии `vX.Y.Z` (или `vX.Y.Z-pre`; переносимый тег `v0` релиз не запускает): тесты, бинарники для пяти платформ с README и LICENSE, `checksums.txt`, smoke-тест Linux-бинарника против демо, заметки из раздела `## [X.Y.Z]` в CHANGELOG.md (без раздела релиз падает), образ с тегами `X.Y.Z`, `X.Y`, `latest` и OCI-метками; для нового релиза без суффикса workflow переносит тег `v0` (мажорный) на него, если это новейший v0.x.y.
 
 ## 10. Демо-цель: уязвимый магазин
 
@@ -291,7 +301,7 @@ examples/                 готовые сценарии для демо-маг
 | M0 | репозиторий, CI, демо-магазин в двух вариантах | `photofinish demo` поднимается, тесты зелёные |
 | M1 | движки `h2`, `h1`, `burst`, команда `probe` | `h2` стабильно ловит купон на `/vuln`, бенчмарк показывает разницу движков |
 | M2 | сценарии, CEL, trials, вердикты, JSON-доказательства | `photofinish run examples/*.yaml` даёт верные вердикты на `/vuln` и `/fixed` |
-| M3 | SARIF, JUnit, HTML, Docker, GitHub Action | Action в тестовом репозитории роняет сборку на `/vuln` |
+| M3 | SARIF, JUnit, HTML, Docker, GitHub Action | Action роняет сборку на `/vuln` (в CI это проверяет задание `action`) |
 | M4 | веб-интерфейс (Scenarios, Editor, Run, Reports) | сценарий собирается и запускается из UI, таймлайн показывает попытки |
 | M5 | документация EN/RU, скриншоты, GIF, релиз v0.1.0, статья | релиз опубликован, лаборатория-гонка в WebSec-Lab |
 

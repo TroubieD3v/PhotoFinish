@@ -1,0 +1,256 @@
+name: PhotoFinish race test
+description: >
+  Run PhotoFinish scenarios against a test environment, write SARIF, JUnit and
+  HTML reports and fail the build when a race condition is proven.
+author: TroubieD3v
+branding:
+  icon: zap
+  color: gray-dark
+
+inputs:
+  scenarios:
+    description: >
+      Scenario files, separated by spaces or newlines. Globs are expanded with
+      bash globstar, e.g. "races/**/*.yaml". Paths are relative to the working
+      directory and cannot contain spaces.
+    required: true
+  engine:
+    description: Override race.engine of every scenario (auto, h2, h1 or burst). Empty keeps the scenario's value.
+    required: false
+    default: ""
+  trials:
+    description: Override the number of trials. Empty keeps the scenario's value.
+    required: false
+    default: ""
+  copies:
+    description: Override the number of race copies. Empty keeps the scenario's value.
+    required: false
+    default: ""
+  insecure:
+    description: Skip TLS certificate verification ("true" or "false"), for test environments with self-signed certificates.
+    required: false
+    default: "false"
+  fail-on:
+    description: >
+      Passed to photofinish run --fail-on. "violated" (the default) and
+      "inconclusive" fail on VIOLATED (exit code 1) and on INCONCLUSIVE (exit
+      code 2); "never" only reports, and only an ERROR (exit code 3) fails.
+    required: false
+    default: violated
+  sarif:
+    description: Where to write the SARIF report, for github/codeql-action/upload-sarif. Empty skips it.
+    required: false
+    default: photofinish.sarif
+  junit:
+    description: Where to write the JUnit XML report. Empty skips it.
+    required: false
+    default: photofinish-junit.xml
+  html:
+    description: Where to write the self-contained HTML report. Empty skips it.
+    required: false
+    default: photofinish-report.html
+  version:
+    description: >
+      PhotoFinish version to install with go install (a tag such as v0.1.0, a
+      branch or a commit). Empty uses the ref the action itself was used at.
+    required: false
+    default: ""
+
+outputs:
+  verdict:
+    description: The worst verdict over all scenarios (HELD, INCONCLUSIVE, VIOLATED or ERROR).
+    value: ${{ steps.run.outputs.verdict }}
+  exit-code:
+    description: The exit code of photofinish run under fail-on (0 passes); the action exits with it.
+    value: ${{ steps.run.outputs.exit-code }}
+  report-dir:
+    description: Directory with one JSON report per scenario and the SARIF, JUnit and HTML files, under RUNNER_TEMP; every use of the action gets its own.
+    value: ${{ steps.run.outputs.report-dir }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v7
+      with:
+        go-version: "1.27"
+        cache: false
+
+    - name: Install PhotoFinish
+      id: install
+      shell: bash
+      env:
+        PF_VERSION: ${{ inputs.version }}
+        PF_ACTION_REF: ${{ github.action_ref }}
+        PF_ACTION_PATH: ${{ github.action_path }}
+        GOFLAGS: ""
+      run: |
+        set -euo pipefail
+        bindir="$RUNNER_TEMP/photofinish-bin"
+        mkdir -p "$bindir"
+        exe="$(go env GOEXE)"
+        bin="$bindir/photofinish$exe"
+        module=github.com/TroubieD3v/photofinish
+
+        # Used as "uses: ./" the action lives inside the workspace and is built
+        # from that checkout. Used as "uses: TroubieD3v/PhotoFinish@<ref>" it is
+        # installed at that ref, unless the version input names another one.
+        local_action=false
+        case "$PF_ACTION_PATH" in
+          "$GITHUB_WORKSPACE" | "$GITHUB_WORKSPACE"/* | "$GITHUB_WORKSPACE"\\*) local_action=true ;;
+        esac
+        ref="$PF_VERSION"
+        if [ -z "$ref" ] && [ "$local_action" = false ]; then
+          ref="$PF_ACTION_REF"
+        fi
+        if [ -n "$ref" ] && ! [[ "$ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/+-]*$ ]]; then
+          echo "::error title=PhotoFinish::version must be a tag, branch or commit, got an invalid ref"
+          exit 64
+        fi
+
+        if [ -z "$ref" ] && [ -f "$PF_ACTION_PATH/cmd/photofinish/main.go" ]; then
+          echo "Building PhotoFinish from $PF_ACTION_PATH"
+          (cd "$PF_ACTION_PATH" && go build -trimpath -buildvcs=false \
+            -ldflags "-s -w -X main.version=0.0.0-local" -o "$bin" ./cmd/photofinish)
+        else
+          ref="${ref:-main}"
+          echo "Installing $module/cmd/photofinish@$ref"
+          # No -X main.version: the binary reports the module version that go
+          # install resolved (v0 -> v0.1.0, a commit -> a pseudo-version).
+          GOBIN="$bindir" go install -trimpath -ldflags "-s -w" "$module/cmd/photofinish@$ref"
+        fi
+
+        # The job summary helper uses the standard library only; it is built
+        # outside any module so the caller's go.mod does not matter.
+        (cd "$RUNNER_TEMP" && go build -o "$bindir/action-summary$exe" "$PF_ACTION_PATH/scripts/action-summary.go")
+
+        "$bin" version
+        echo "bin=$bin" >> "$GITHUB_OUTPUT"
+        echo "summary-bin=$bindir/action-summary$exe" >> "$GITHUB_OUTPUT"
+
+    - name: Run scenarios
+      id: run
+      shell: bash
+      env:
+        PF_BIN: ${{ steps.install.outputs.bin }}
+        PF_SUMMARY_BIN: ${{ steps.install.outputs.summary-bin }}
+        PF_SCENARIOS: ${{ inputs.scenarios }}
+        PF_ENGINE: ${{ inputs.engine }}
+        PF_TRIALS: ${{ inputs.trials }}
+        PF_COPIES: ${{ inputs.copies }}
+        PF_INSECURE: ${{ inputs.insecure }}
+        PF_FAIL_ON: ${{ inputs.fail-on }}
+        PF_SARIF: ${{ inputs.sarif }}
+        PF_JUNIT: ${{ inputs.junit }}
+        PF_HTML: ${{ inputs.html }}
+      run: |
+        set -euo pipefail
+        # A directory of its own for every use of the action, so that the
+        # report-dir of an earlier use in the same job keeps its reports.
+        n=1
+        while [ -e "$RUNNER_TEMP/photofinish-out-$n" ]; do n=$((n + 1)); done
+        out="$RUNNER_TEMP/photofinish-out-$n"
+        mkdir -p "$out"
+
+        usage_error() {
+          echo "::error title=PhotoFinish::$1"
+          echo "verdict=ERROR" >> "$GITHUB_OUTPUT"
+          echo "exit-code=64" >> "$GITHUB_OUTPUT"
+          exit 64
+        }
+        case "$PF_FAIL_ON" in
+          violated | inconclusive | never) ;;
+          *) usage_error "fail-on must be violated, inconclusive or never" ;;
+        esac
+        case "$PF_INSECURE" in
+          true | false) ;;
+          *) usage_error "insecure must be true or false" ;;
+        esac
+
+        # Split the input on whitespace without globbing, then expand every
+        # pattern on its own so that a pattern without matches is an error.
+        if ! shopt -s globstar 2>/dev/null; then
+          echo "::warning title=PhotoFinish::this bash has no globstar; ** matches like *"
+        fi
+        shopt -s nullglob
+        set -f
+        read -r -d '' -a patterns <<< "$PF_SCENARIOS" || true
+        set +f
+        files=()
+        for pattern in ${patterns[@]+"${patterns[@]}"}; do
+          if [[ "$pattern" == *[*?[]* ]]; then
+            # shellcheck disable=SC2206 # the pattern is expanded on purpose
+            matches=($pattern)
+          elif [ -e "$pattern" ]; then
+            matches=("$pattern")
+          else
+            matches=()
+          fi
+          if [ "${#matches[@]}" -eq 0 ]; then
+            usage_error "no scenario file matches $pattern"
+          fi
+          for f in "${matches[@]}"; do
+            dup=false
+            for seen in ${files[@]+"${files[@]}"}; do
+              if [ "$seen" = "$f" ]; then dup=true; break; fi
+            done
+            if [ "$dup" = false ]; then files+=("$f"); fi
+          done
+        done
+        if [ "${#files[@]}" -eq 0 ]; then
+          usage_error "the scenarios input names no file"
+        fi
+
+        args=(run --out "$out" --fail-on "$PF_FAIL_ON")
+        if [ -n "$PF_ENGINE" ]; then args+=(--engine "$PF_ENGINE"); fi
+        if [ -n "$PF_TRIALS" ]; then args+=(--trials "$PF_TRIALS"); fi
+        if [ -n "$PF_COPIES" ]; then args+=(--copies "$PF_COPIES"); fi
+        if [ "$PF_INSECURE" = true ]; then args+=(--insecure); fi
+
+        set +e
+        "$PF_BIN" "${args[@]}" -- "${files[@]}"
+        code=$?
+        set -e
+
+        copy_report() {
+          local src="$out/$1" dst="$2"
+          if [ -z "$dst" ]; then return 0; fi
+          if [ -f "$src" ]; then
+            mkdir -p "$(dirname "$dst")"
+            cp "$src" "$dst"
+            echo "wrote $dst"
+          else
+            echo "::warning title=PhotoFinish::$1 was not written, so $dst is missing"
+          fi
+        }
+        copy_report results.sarif "$PF_SARIF"
+        copy_report junit.xml "$PF_JUNIT"
+        copy_report report.html "$PF_HTML"
+
+        summary_args=(-out "$out" -summary "${GITHUB_STEP_SUMMARY:-}" -exit-code "$code" -fail-on "$PF_FAIL_ON")
+        for f in "$PF_SARIF" "$PF_JUNIT" "$PF_HTML"; do
+          if [ -n "$f" ]; then summary_args+=(-report "$f"); fi
+        done
+        verdict="$("$PF_SUMMARY_BIN" "${summary_args[@]}" -- "${files[@]}")"
+
+        echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        echo "report-dir=$out" >> "$GITHUB_OUTPUT"
+
+    - name: Apply fail-on
+      shell: bash
+      env:
+        PF_VERDICT: ${{ steps.run.outputs.verdict }}
+        PF_EXIT_CODE: ${{ steps.run.outputs.exit-code }}
+        PF_FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        set -euo pipefail
+        if ! [[ "$PF_EXIT_CODE" =~ ^[0-9]+$ ]]; then
+          echo "::error title=PhotoFinish::the run step reported no exit code"
+          exit 3
+        fi
+        if [ "$PF_EXIT_CODE" -ne 0 ]; then
+          echo "::error title=PhotoFinish::worst verdict $PF_VERDICT, exit code $PF_EXIT_CODE (fail-on: $PF_FAIL_ON)"
+        else
+          echo "worst verdict $PF_VERDICT, exit code 0 (fail-on: $PF_FAIL_ON)"
+        fi
+        exit "$PF_EXIT_CODE"
