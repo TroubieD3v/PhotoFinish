@@ -182,7 +182,6 @@ type frontHandler struct {
 }
 
 func (h *frontHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	arrivalNs := clock.UnixNano()
 	arrival := time.Now()
 	// A non-canonical path (dot segments, repeated slashes) is answered with
 	// a JSON 404 instead of the mux's redirect to the cleaned path: that
@@ -194,15 +193,23 @@ func (h *frontHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		variant = variantOf(r.URL.Path)
 	}
 
+	rec := &statusWriter{ResponseWriter: w}
+
+	// The arrival time is the moment the request is complete. Go starts the
+	// handler as soon as the headers arrive, but the race engines hold back
+	// the last byte of every request until the release, so the body is read
+	// first and the time is taken after it. Read errors (a body over the
+	// limit) are replayed to the handler after the bytes that did arrive.
+	body, readErr := io.ReadAll(http.MaxBytesReader(rec, r.Body, maxBodyBytes))
+	arrivalNs := clock.UnixNano()
+	r.Body = &bufferedBody{r: bytes.NewReader(body), err: readErr}
+
 	hdr := w.Header()
 	hdr.Set(headerArrival, strconv.FormatInt(arrivalNs, 10))
 	hdr.Set("Cache-Control", "no-store")
 	if variant != "" {
 		hdr.Set(headerVariant, variant)
 	}
-
-	rec := &statusWriter{ResponseWriter: w}
-	r.Body = http.MaxBytesReader(rec, r.Body, maxBodyBytes)
 
 	if !canonical {
 		writeError(rec, http.StatusNotFound, "not found")
@@ -272,6 +279,23 @@ func variantOf(path string) string {
 }
 
 // statusWriter records the status code for the access log.
+// bufferedBody replays a request body that was read ahead, followed by the
+// error that ended the read, if any.
+type bufferedBody struct {
+	r   *bytes.Reader
+	err error
+}
+
+func (b *bufferedBody) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	if err == io.EOF && b.err != nil {
+		return n, b.err
+	}
+	return n, err
+}
+
+func (b *bufferedBody) Close() error { return nil }
+
 type statusWriter struct {
 	http.ResponseWriter
 	status int

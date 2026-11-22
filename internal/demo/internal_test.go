@@ -12,10 +12,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/TroubieD3v/photofinish/internal/clock"
 )
 
 func TestBearerToken(t *testing.T) {
@@ -708,5 +711,57 @@ func TestCouponAfterResetLeavesNoOrphan(t *testing.T) {
 				t.Errorf("%d discount rows written for carts the caller does not have", n)
 			}
 		})
+	}
+}
+
+// TestArrivalAfterBody checks that X-Arrival-Ns is taken when the request
+// body is complete, not when the handler starts: the race engines send the
+// headers early and hold back the last byte until the release.
+func TestArrivalAfterBody(t *testing.T) {
+	srv := httptest.NewServer(newTestShop(t, 0).Handler())
+	defer srv.Close()
+
+	pr, pw := io.Pipe()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/vuln/api/carts", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer demo-alice")
+	req.Header.Set("Content-Type", "application/json")
+	req.ContentLength = 2
+
+	type result struct {
+		resp *http.Response
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		resp, err := srv.Client().Do(req)
+		done <- result{resp, err}
+	}()
+	if _, err := pw.Write([]byte("{")); err != nil {
+		t.Fatal(err)
+	}
+	// Give the server time to start the handler on the headers; the
+	// assertion below holds however long this takes.
+	time.Sleep(50 * time.Millisecond)
+	released := clock.UnixNano()
+	if _, err := pw.Write([]byte("}")); err != nil {
+		t.Fatal(err)
+	}
+	pw.Close()
+
+	res := <-done
+	if res.err != nil {
+		t.Fatal(res.err)
+	}
+	defer res.resp.Body.Close()
+	io.Copy(io.Discard, res.resp.Body)
+	arrival, err := strconv.ParseInt(res.resp.Header.Get("X-Arrival-Ns"), 10, 64)
+	if err != nil {
+		t.Fatalf("X-Arrival-Ns: %v", err)
+	}
+	if arrival < released {
+		t.Errorf("X-Arrival-Ns %d is %s before the last body byte was sent", arrival, time.Duration(released-arrival))
 	}
 }
