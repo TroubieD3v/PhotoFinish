@@ -44,6 +44,10 @@ type SARIFOptions struct {
 	// the current directory. Scenario files outside BaseDir get absolute
 	// file URIs instead.
 	BaseDir string
+	// ReadFile reads a scenario file named in a report, to find the line of
+	// its invariant. nil means os.ReadFile; a server passes a reader that
+	// stays inside its workspace. An error makes the line 1.
+	ReadFile func(name string) ([]byte, error)
 }
 
 // SARIF writes the reports as one SARIF 2.1.0 log with one run: a PF001
@@ -57,6 +61,10 @@ type SARIFOptions struct {
 func SARIF(w io.Writer, reps []*runner.Report, opts SARIFOptions) error {
 	if err := checkReports(reps); err != nil {
 		return err
+	}
+	read := opts.ReadFile
+	if read == nil {
+		read = os.ReadFile
 	}
 	base, err := filepath.Abs(valueOr(opts.BaseDir, "."))
 	if err != nil {
@@ -82,7 +90,7 @@ func SARIF(w io.Writer, reps []*runner.Report, opts SARIFOptions) error {
 		inv.addTimes(rep.StartedAt, rep.FinishedAt)
 		switch rep.Verdict {
 		case runner.Violated, runner.Inconclusive:
-			run.Results = append(run.Results, sarifResultFor(rep, base))
+			run.Results = append(run.Results, sarifResultFor(rep, base, read))
 		case runner.Errored:
 			inv.ExecutionSuccessful = false
 			n := sarifNotification{
@@ -150,7 +158,7 @@ func sarifRules() []sarifRule {
 }
 
 // sarifResultFor builds the result of a VIOLATED or INCONCLUSIVE report.
-func sarifResultFor(rep *runner.Report, base string) sarifResult {
+func sarifResultFor(rep *runner.Report, base string, read func(string) ([]byte, error)) sarifResult {
 	res := sarifResult{
 		RuleID:    RuleViolated,
 		RuleIndex: 0,
@@ -179,7 +187,7 @@ func sarifResultFor(rep *runner.Report, base string) sarifResult {
 	if loc, ok := artifactLocation(rep.File, base); ok {
 		res.Locations = []sarifLocation{{PhysicalLocation: sarifPhysicalLocation{
 			ArtifactLocation: loc,
-			Region:           &sarifRegion{StartLine: invariantLine(rep.File)},
+			Region:           &sarifRegion{StartLine: invariantLine(rep.File, read)},
 		}}}
 	}
 	return res
@@ -255,8 +263,8 @@ func fileURI(p string) string {
 
 // invariantLine returns the 1-based line of check.invariant in the scenario
 // file, or 1 when the file cannot be read or parsed.
-func invariantLine(file string) int {
-	data, err := os.ReadFile(filepath.FromSlash(file))
+func invariantLine(file string, read func(string) ([]byte, error)) int {
+	data, err := read(filepath.FromSlash(file))
 	if err != nil {
 		return 1
 	}

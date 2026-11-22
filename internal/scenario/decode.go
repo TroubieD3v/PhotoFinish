@@ -76,13 +76,13 @@ func Parse(data []byte, path string) (*Scenario, error) {
 		if errors.Is(err, io.EOF) {
 			return nil, &FieldError{File: path, Msg: "the file is empty"}
 		}
-		return nil, syntaxError(path, err)
+		return nil, syntaxError(path, data, err)
 	}
 	var extra yaml.Node
 	if err := dec.Decode(&extra); err == nil {
 		return nil, &FieldError{File: path, Line: extra.Line, Msg: "only one YAML document is allowed (remove the extra ---)"}
 	} else if !errors.Is(err, io.EOF) {
-		return nil, syntaxError(path, err)
+		return nil, syntaxError(path, data, err)
 	}
 	root := &doc
 	if root.Kind == yaml.DocumentNode {
@@ -107,8 +107,19 @@ func Parse(data []byte, path string) (*Scenario, error) {
 
 var yamlLineRE = regexp.MustCompile(`^yaml: line (\d+): `)
 
-// syntaxError converts a yaml.v3 parse error into a FieldError with a line.
-func syntaxError(path string, err error) error {
+// yamlParserErrors are the messages of yaml.v3 parser (not scanner)
+// errors. yaml.v3 reports their line 0-based, one line too early.
+var yamlParserErrors = []string{
+	"did not find expected",
+	"found duplicate %TAG directive",
+	"found duplicate %YAML directive",
+	"found incompatible YAML document",
+	"found undefined tag handle",
+}
+
+// syntaxError converts a yaml.v3 parse error of data into a FieldError
+// with the line of the problem.
+func syntaxError(path string, data []byte, err error) error {
 	msg := err.Error()
 	line := 0
 	if m := yamlLineRE.FindStringSubmatch(msg); m != nil {
@@ -117,7 +128,34 @@ func syntaxError(path string, err error) error {
 	} else {
 		msg = strings.TrimPrefix(msg, "yaml: ")
 	}
+	if line > 0 {
+		line = problemLine(data, line, msg)
+	}
 	return &FieldError{File: path, Line: line, Msg: "invalid YAML: " + msg}
+}
+
+// problemLine corrects the line yaml.v3 gives for a syntax error. Parser
+// errors carry a 0-based line (the start of the collection being parsed).
+// A tab in the indentation is reported at the end of the line before the
+// tab, so the line is moved to the first of the next lines that is indented
+// with a tab.
+func problemLine(data []byte, line int, msg string) int {
+	lines := strings.Split(string(data), "\n")
+	for _, p := range yamlParserErrors {
+		if strings.HasPrefix(msg, p) {
+			return min(line+1, max(len(lines), 1))
+		}
+	}
+	if strings.Contains(msg, "tab character") {
+		for n := line; n <= min(line+2, len(lines)); n++ {
+			text := lines[n-1]
+			indent := text[:len(text)-len(strings.TrimLeft(text, " \t"))]
+			if strings.Contains(indent, "\t") {
+				return n
+			}
+		}
+	}
+	return line
 }
 
 // nodeDecoder is implemented by types that decode themselves from a node.

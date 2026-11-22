@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/TroubieD3v/photofinish/internal/clock"
 	"github.com/TroubieD3v/photofinish/internal/engine"
 	"github.com/TroubieD3v/photofinish/internal/scenario"
 )
@@ -156,14 +157,17 @@ func (r *run) send(ctx context.Context, req engine.Request) (*scenario.Response,
 	if len(req.Body) == 0 {
 		hreq.Body, hreq.ContentLength = http.NoBody, 0
 	}
-	start := time.Now()
+	// The high-resolution clock: on Windows time.Since advances in steps of
+	// up to half a millisecond, which reports fast local steps as 0.
+	start := clock.UnixNano()
+	since := func() time.Duration { return time.Duration(clock.UnixNano() - start) }
 	hresp, err := r.client.Do(hreq)
 	if err != nil {
-		return nil, time.Since(start), err
+		return nil, since(), err
 	}
 	defer hresp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(hresp.Body, maxStepBody))
-	dur := time.Since(start)
+	dur := since()
 	if err != nil {
 		return nil, dur, fmt.Errorf("reading response: %w", err)
 	}

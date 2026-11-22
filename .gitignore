@@ -7,6 +7,15 @@
 *.db-wal
 *.db-shm
 
+# web
+/web/node_modules/
+/web/dist/
+/web/test-results/
+/web/playwright-report/
+/web/blob-report/
+/web/playwright/.cache/
+/internal/ui/dist/app/
+
 # scratch output and logs
 /tmp*/
 /.tmp*/

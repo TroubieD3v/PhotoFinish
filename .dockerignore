@@ -1,5 +1,5 @@
-# Only the Go sources are needed to build the image. Patterns without a slash
-# match at the top of the build context only.
+# The image needs the Go sources and web/ (the UI stage builds it). Patterns
+# without a slash match at the top of the build context only.
 .git
 .github
 .tmp*
@@ -19,3 +19,13 @@ photofinish
 *.db-shm
 .idea
 .vscode
+
+# Local web build artifacts: the UI stage installs its own node_modules and
+# writes internal/ui/dist/app itself.
+web/node_modules
+web/dist
+web/test-results
+web/playwright-report
+web/blob-report
+web/.vite
+internal/ui/dist/app

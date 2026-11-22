@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"flag"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -566,5 +567,23 @@ func TestTicks(t *testing.T) {
 		if got := niceStep(raw); got != want {
 			t.Errorf("niceStep(%v) = %v, want %v", raw, got, want)
 		}
+	}
+}
+
+func TestSARIFReadFileOption(t *testing.T) {
+	rep := fixture()[0]
+	var asked []string
+	doc := decodeSARIF(t, []*runner.Report{rep}, SARIFOptions{BaseDir: "testdata", ReadFile: func(name string) ([]byte, error) {
+		asked = append(asked, name)
+		return []byte("version: 1\n\n\ncheck:\n  invariant: size(race) == 1\n"), nil
+	}})
+	if got := doc.Runs[0].Results[0].Locations[0].PhysicalLocation.Region.StartLine; got != 5 || len(asked) != 1 {
+		t.Errorf("start line %d from the reader (asked %v), want 5", got, asked)
+	}
+	doc = decodeSARIF(t, []*runner.Report{rep}, SARIFOptions{BaseDir: "testdata", ReadFile: func(string) ([]byte, error) {
+		return nil, fs.ErrPermission
+	}})
+	if got := doc.Runs[0].Results[0].Locations[0].PhysicalLocation.Region.StartLine; got != 1 {
+		t.Errorf("start line %d when the reader refuses, want 1", got)
 	}
 }

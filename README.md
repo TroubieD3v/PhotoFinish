@@ -5,7 +5,7 @@
 PhotoFinish proves race conditions in web APIs: synchronized requests via the HTTP/2 single-packet attack, a
 business rule you declare, and the evidence.
 
-Pre-alpha: M1-M3 — engines, scenarios, verdicts, reports, Docker and the GitHub Action work; the web UI and the first release arrive in M4-M5.
+Pre-alpha: M1-M4 — engines, scenarios, verdicts, reports, CI integration and the web UI work; the first release arrives with M5.
 
 > **Note**: test only systems you own or are explicitly authorized to test. The demo shop in this repository is
 > intentionally vulnerable and listens on loopback only. See [SECURITY.md](SECURITY.md).
@@ -18,6 +18,7 @@ Pre-alpha: M1-M3 — engines, scenarios, verdicts, reports, Docker and the GitHu
 | `photofinish probe <url>` | inspects a target (TLS, ALPN, HTTP/2 settings, round trips, arrival header) and recommends an engine |
 | `photofinish import <file>` | turns a raw HTTP request (Burp, DevTools) or a HAR entry into a scenario skeleton |
 | `photofinish demo` | starts a shop over HTTPS with HTTP/2 whose four scenarios exist in a racy and a fixed variant |
+| `photofinish serve` | starts the web UI on `http://127.0.0.1:7340`: edit and validate scenarios, run them, watch the trials arrive, read the timeline and the evaluated invariant, keep a history of runs, see [Web UI](#web-ui) |
 
 The engines:
 
@@ -39,6 +40,11 @@ make build            # or: go build -o bin/photofinish ./cmd/photofinish
 ```
 
 `make test` runs `go vet` and the tests with the race detector, which needs CGO and a C compiler.
+
+The web UI is a separate build step that needs Node.js 22: `make ui` (`npm --prefix web ci` and
+`npm --prefix web run build`) writes it to `internal/ui/dist/app`, and the next `make build` embeds it into the
+binary. Everything else works without it; a binary built without the UI answers `photofinish serve` with a page that
+says so. The release archives and the Docker image always contain the UI.
 
 ## Run a race
 
@@ -114,7 +120,7 @@ all four demo scenarios; `./bin/photofinish run examples/*.yaml` runs them all.
 | Code | `run` | other commands |
 |---|---|---|
 | 0 | every scenario HELD | success |
-| 1 | at least one scenario VIOLATED | runtime failure (`probe`, `import`, `demo`) |
+| 1 | at least one scenario VIOLATED | runtime failure (`probe`, `import`, `demo`, `serve`) |
 | 2 | INCONCLUSIVE: at least half of the trials of a scenario could not be judged | - |
 | 3 | ERROR: invalid scenario, scope violation or setup failure before the first race | - |
 | 64 | usage error (unknown command, bad flag or argument) | usage error |
@@ -192,6 +198,92 @@ response and the reproduce command.
 
 All formats are built from the same report, so secrets are masked in all of them, but response bodies are included.
 Review a report before you share it, see [SECURITY.md](SECURITY.md).
+
+## Web UI
+
+```bash
+make ui && make build
+./bin/photofinish serve --demo
+```
+
+```text
+PhotoFinish UI: http://127.0.0.1:7340/#token=<token>
+```
+
+Open the printed link. `serve` works on the scenario files of a workspace directory (the current directory by
+default) and keeps a history of runs; `--demo` also starts the demo shop on `https://127.0.0.1:8443` (see
+`--demo-addr`), so the examples can be copied into the workspace and run right away.
+
+| Screen | Does |
+|---|---|
+| Scenarios | the scenario files of the workspace (`*.yaml`, `*.yml`) with target, engine, last verdict and last run; invalid files are flagged with their error. "Examples for the demo shop" copies an embedded example to `examples/<name>.yaml` in the workspace |
+| Editor | the YAML with line numbers and live validation: parse errors, validation errors and CEL compile errors of the invariant are marked at their line and listed as problems. Beside it: the parsed summary (target, scope, engine, copies, trials, invariant), the run options (engine, trials, copies, and `insecure` when the scenario does not set `tls.insecure`) and Run. Ctrl+S (Cmd+S) saves; leaving with unsaved changes asks first; New scenario starts from a commented template |
+| Run | while the race runs, a progress bar and the trials as they finish, with Cancel. When it is done: the verdict and summary, engine, copies, release writes and bytes, median response and server arrival spread, requests spent; the trials table; the timeline of the selected trial (one row per race request with its status: pre-send, release, first response byte, exact values on hover or focus, server arrival times in µs); the invariant with every evaluated term and its values; the check response; the setup and reset steps; the reproduce command; downloads as JSON, SARIF, JUnit and HTML |
+| Runs | the history of runs, filtered by scenario and verdict; finished runs can be deleted |
+| Probe | the checks of `photofinish probe`: TLS, ALPN, HTTP/2 and its SETTINGS, statuses, round trips, the arrival header and the recommended engine |
+| Import | paste or drop a raw request or a HAR file (and pick the HAR entry), preview the generated YAML with its list of what is still to be filled in, and save it to the workspace, which opens it in the editor |
+
+The sidebar starts and stops the demo shop and shows the workspace path. The UI has a graphite dark theme and a
+light one (from `prefers-color-scheme`, or the toggle), and works with the keyboard.
+
+*Screenshots of the Scenarios, Editor and Run screens follow in M5.*
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--addr` | `127.0.0.1:7340` | listen address; a non-loopback address is a usage error (64) without `--expose` |
+| `--workspace` | `.` | the directory whose scenario files the UI lists, reads and writes |
+| `--data` | `<user config dir>/photofinish` | the run history, `photofinish.db` (SQLite); `--data ""` or `--data :memory:` keeps it in memory |
+| `--demo` | off | start the demo shop on `--demo-addr` at boot; the sidebar starts and stops it too |
+| `--demo-addr` | `127.0.0.1:8443` | listen address of the demo shop, loopback only; the examples expect the default |
+| `--demo-window` | `0s` | artificial pause between the check and the write in the `/vuln` handlers of the demo shop, up to `2s` (as `demo --window`) |
+| `--expose` | off | allow a non-loopback address, with a warning (isolated lab networks only) |
+| `--open` | off | open the UI in the default browser, through a private redirect page so that the token is not on a command line |
+
+Only one race runs at a time; a run can be cancelled. Every run is stored with its masked report, also when it
+ended in ERROR. The user config directory is `~/.config` on Linux, `~/Library/Application Support` on macOS and
+`%AppData%` on Windows.
+
+### Security model
+
+`serve` sends attack traffic when asked to, so a web page you visit must not be able to drive it:
+
+- **Loopback only.** It binds to `127.0.0.1` by default; any other address needs `--expose` and prints a warning.
+- **Session token.** 32 random bytes (hex) per start, or `PHOTOFINISH_TOKEN` from the environment (at least 32
+  characters). It is printed once, in the fragment of the link (`#token=`), which the browser never sends to a
+  server. The UI keeps it in the `sessionStorage` of the tab and removes it from the address bar. Every `/api/`
+  request needs `Authorization: Bearer <token>` (compared in constant time) and gets 401 without it; only
+  `GET /api/health` is open. There are no cookies, so another site cannot make your browser send the token.
+- **Host and Origin checks.** A request whose `Host` is not `127.0.0.1:<port>`, `localhost:<port>` or
+  `[::1]:<port>` is refused, which defeats DNS rebinding (with `--expose` any host is accepted and the token still
+  protects the API). A write (POST, PUT, DELETE) with an `Origin` that does not match the host is refused with 403.
+- **Headers.** A strict Content Security Policy (`default-src 'self'`, `frame-ancestors 'none'`, no inline
+  scripts), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, and `Cache-Control: no-store` on
+  the API.
+- **Workspace confinement.** Only `*.yaml` and `*.yml` files, relative paths with forward slashes, no `..`, no
+  absolute paths, and no symlinks that lead out of the workspace; files up to 256 KiB, request bodies up to 1 MiB.
+  Names must be spelled as on disk: other letter case and Windows 8.3 short names are refused. The listing goes 4
+  levels deep, up to 500 files, and skips dot directories, `node_modules` and `vendor`.
+- **`--open`.** The browser gets the link through a redirect page in a private temporary directory, so the token
+  is not on the command line of the launcher or the browser, where other local users could read it.
+- **Same rules as the CLI.** A run from the UI is an ordinary run: the scope (`allow_hosts`) and the budget of the
+  scenario are enforced by the runner, and the server adds no way around them.
+
+Anyone with the token can do what you can do in the UI, including writing a scenario with any scope: treat it like
+a password. See [SECURITY.md](SECURITY.md) for the threat model.
+
+### Web UI in Docker
+
+In a container the server has to listen on all interfaces of the container, which needs `--expose`; publish it to
+the loopback of the host only, and set the token yourself so that you know the link:
+
+```bash
+export PHOTOFINISH_TOKEN="$(openssl rand -hex 32)"
+docker run --rm -p 127.0.0.1:7340:7340 -e PHOTOFINISH_TOKEN -v "$PWD:/work" ghcr.io/troubied3v/photofinish serve --addr 0.0.0.0:7340 --expose --workspace /work --data /tmp/pf
+# then open http://127.0.0.1:7340/#token=$PHOTOFINISH_TOKEN
+```
+
+`/tmp/pf` lives in the container, so the history ends with it. To save scenarios into the mounted directory, add
+`--user "$(id -u):$(id -g)"`, as for reports.
 
 ## Use in CI
 
@@ -289,6 +381,8 @@ to the loopback of the host only:
 docker run --rm -p 127.0.0.1:8443:8443 ghcr.io/troubied3v/photofinish demo --addr 0.0.0.0:8443 --expose
 ```
 
+The web UI in a container: see [Web UI in Docker](#web-ui-in-docker).
+
 Inside another container `127.0.0.1` is that container itself. On Linux, run the scenarios with `--network host` to
 reach the shop on the loopback of the host:
 
@@ -385,7 +479,7 @@ in-memory SQLite state: `/vuln` checks in one statement and writes in another (a
 | Gift card | `POST /api/giftcards/{code}/redeem` | read `redeemed`, credit the balance, then mark it | `UPDATE ... WHERE redeemed = 0` in a transaction, affected rows checked | a card's value is credited once |
 
 Both variants share request parsing and responses; only the store operation differs. Every response carries
-`X-Arrival-Ns`, the server's clock (Unix nanoseconds) at the moment it started handling the request, so the spread of
+`X-Arrival-Ns`, the server's clock (Unix nanoseconds) at the moment the whole request, body included, had arrived, so the spread of
 arrival times of a race can be measured on the server side. It is read from a high-resolution counter
 (QueryPerformanceCounter on Windows, the monotonic clock elsewhere): the plain wall clock on Windows advances in
 steps of tens of microseconds and would give a whole burst the same value. API responses also carry `X-PhotoFinish-Variant`.
@@ -415,15 +509,14 @@ The design, in Russian: [docs/DESIGN.ru.md](docs/DESIGN.ru.md).
 | Milestone | Delivers | Done when |
 |---|---|---|
 | **M0** | **repository, CI, the demo shop in two variants** | **`photofinish demo` starts, tests are green** |
-| M1 (partly done) | engines `h2` (single-packet), `h1` (last-byte sync), `burst`; the `probe` command | `h2` reliably catches the coupon race on `/vuln` (done); a benchmark measures the arrival spread of `h2` against `h1` and `burst` (not written yet; on loopback the hit rates of the three engines are similar) |
+| **M1** | **engines `h2` (single-packet), `h1` (last-byte sync), `burst`; the `probe` command** | **`h2` reliably catches the coupon race on `/vuln`; [BENCHMARKS.md](BENCHMARKS.md) measures the arrival spread of `h2` against `h1` and `burst` (the Benchmark workflow)** |
 | **M2** | **scenarios, CEL invariants, trials, verdicts, JSON evidence** | **`photofinish run examples/*.yaml` gives the right verdicts on `/vuln` and `/fixed`** |
 | **M3** | **SARIF, JUnit, HTML, Docker, GitHub Action** | **the Action fails a build against `/vuln` (the `action` job in CI)** |
-| M4 | web UI (Scenarios, Editor, Run, Reports) and `photofinish serve` | a scenario is built and run from the UI; the timeline shows the trials |
+| **M4** | **web UI (Scenarios, Editor, Run, Runs, Probe, Import) and `photofinish serve`** | **a scenario is built and run from the UI; the timeline shows the trials (the `web` job in CI)** |
 | M5 | EN/RU documentation, screenshots, GIF, release v0.1.0, article | the release is published, a race lab is in WebSec-Lab |
 
-Planned UI, the Run screen (a mockup, not implemented yet):
-
-![Planned UI: the Run screen with trials, a per-stream timeline and the evaluated invariant](docs/mockup-run.png)
+The Run screen follows the mockup [docs/mockup-run.png](docs/mockup-run.png); screenshots of the real UI follow
+in M5.
 
 ## Responsible use
 
@@ -431,7 +524,8 @@ PhotoFinish is for systems you own or are authorized to test. Race testing sends
 and can change real state: balances, orders, coupons, account lockouts. Every scenario must list the hosts it may
 contact, and a request budget caps the run. The demo shop is intentionally vulnerable: it binds to `127.0.0.1` by
 default, refuses other addresses unless you pass `--expose`, keeps its state in memory and uses throwaway tokens
-and a throwaway certificate.
+and a throwaway certificate. `photofinish serve` also binds to loopback only and answers only requests that carry
+its session token.
 
 [SECURITY.md](SECURITY.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [CHANGELOG.md](CHANGELOG.md)
 

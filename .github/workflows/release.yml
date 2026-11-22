@@ -33,6 +33,19 @@ jobs:
           if ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "tag $GITHUB_REF_NAME is not vX.Y.Z or vX.Y.Z-pre"; exit 1
           fi
+      # The web UI first: go build embeds internal/ui/dist/app, so every release
+      # archive (and go test of the embedding) includes it.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build the web UI
+        run: |
+          set -euo pipefail
+          npm --prefix web ci
+          npm --prefix web run build
+          if [ ! -f internal/ui/dist/app/index.html ]; then echo "the UI build wrote no internal/ui/dist/app/index.html"; exit 1; fi
       - run: go test ./...
       - name: Build binaries
         run: |
@@ -86,6 +99,26 @@ jobs:
           echo "coupon-fixed exit code $fixed, coupon-vuln exit code $vuln"
           if [ "$fixed" -ne 0 ] || [ "$vuln" -ne 1 ]; then echo "expected 0 and 1"; cat demo.log; exit 1; fi
 
+      # The archives carry the web UI: serve answers / with the built SPA, not
+      # with the "UI not built" page. The token is a fixed test value.
+      - name: Smoke-test the web UI of the Linux binary
+        env:
+          PHOTOFINISH_TOKEN: release-serve-smoke-test-0123456789abcdef0123456789
+        run: |
+          set -euo pipefail
+          bin="dist/photofinish_${GITHUB_REF_NAME}_linux_amd64/photofinish"
+          mkdir -p serve-workspace
+          "$bin" serve --addr 127.0.0.1:17340 --workspace serve-workspace --data :memory: > serve.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          base=http://127.0.0.1:17340
+          for i in $(seq 1 30); do curl -fsS -o /dev/null "$base/api/health" && break; sleep 1; done
+          curl -fsS "$base/api/health" | grep -q "$GITHUB_REF_NAME" || { echo "health does not report $GITHUB_REF_NAME"; cat serve.log; exit 1; }
+          curl -fsS "$base/" > index.html || { cat serve.log; exit 1; }
+          if ! grep -q 'type="module"' index.html || grep -q 'make ui' index.html; then
+            echo "the release binary does not embed the UI:"; cat index.html; exit 1
+          fi
+
       - name: Release notes from CHANGELOG.md
         run: |
           set -euo pipefail
@@ -98,7 +131,7 @@ jobs:
           if ! grep -q '[^[:space:]]' notes.md; then
             echo "CHANGELOG.md has no section ## [$version]"; exit 1
           fi
-          printf '\n**Downloads**: one static binary per platform (Linux, macOS, Windows) with README.md, README.ru.md and LICENSE. Verify with `checksums.txt`. Docker: `docker pull ghcr.io/troubied3v/photofinish:%s`.\n' "$version" >> notes.md
+          printf '\n**Downloads**: one static binary per platform (Linux, macOS, Windows) with the web UI embedded, README.md, README.ru.md and LICENSE. Verify with `checksums.txt`. Docker: `docker pull ghcr.io/troubied3v/photofinish:%s`.\n' "$version" >> notes.md
           cat notes.md
       - uses: softprops/action-gh-release@v3
         with:

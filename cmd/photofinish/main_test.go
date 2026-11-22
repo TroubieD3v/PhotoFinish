@@ -44,7 +44,7 @@ func TestRunCommands(t *testing.T) {
 		{name: "no command", args: nil, want: exitUsage, stderr: "Usage:", noStdout: true},
 		{name: "unknown command", args: []string{"race"}, want: exitUsage, stderr: `unknown command "race"`, noStdout: true},
 		{name: "help", args: []string{"help"}, want: 0, stdout: "docs/DESIGN.ru.md"},
-		{name: "--help", args: []string{"--help"}, want: 0, stdout: "The serve command (web UI) arrives in milestone M4"},
+		{name: "--help", args: []string{"--help"}, want: 0, stdout: "photofinish serve [--addr"},
 		{name: "help lists commands", args: []string{"help"}, want: 0, stdout: "photofinish run <scenario.yaml>..."},
 		{name: "help lists probe", args: []string{"help"}, want: 0, stdout: "photofinish probe <url>"},
 		{name: "help lists import", args: []string{"help"}, want: 0, stdout: "photofinish import <file>"},

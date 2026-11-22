@@ -8,6 +8,51 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Milestone M4: the web UI and `photofinish serve`.
+- `photofinish serve [--addr 127.0.0.1:7340] [--workspace DIR] [--data DIR] [--demo] [--demo-addr 127.0.0.1:8443]
+  [--demo-window 0s] [--expose] [--open]`: a local API and the embedded web UI for the scenario files of a
+  workspace. It binds to loopback only (a non-loopback
+  `--addr` needs `--expose`, else exit 64, and prints a warning) and prints the link
+  `PhotoFinish UI: http://127.0.0.1:7340/#token=<token>` once. Every `/api/` request except `GET /api/health` needs
+  the session token (32 random bytes, or `PHOTOFINISH_TOKEN` of at least 32 characters) as a Bearer header,
+  compared in constant time; there are no cookies. Requests with a foreign `Host` (DNS rebinding) and writes with
+  a foreign `Origin` are refused; every response carries a strict Content Security Policy, `nosniff` and
+  `no-referrer`, API responses `no-store`. File access stays inside the workspace (`*.yaml`/`*.yml` only, no `..`,
+  no absolute paths, no symlinks out, names spelled exactly as on disk so that letter case and Windows 8.3 short
+  names do not reach dot directories, 256 KiB per file), request bodies are capped at 1 MiB, one race runs at a
+  time and can be cancelled, and the runner still enforces the scope of every scenario. `--open` hands the link to
+  the browser through a private redirect page, so the token is not on a command line.
+- API routes for the UI: workspace scenarios (list, read, create or overwrite with an optional `baseHash` against
+  lost updates, delete), validation with line and column (YAML, scenario rules and the CEL invariant), copying an
+  embedded example, import of a raw request or HAR entry, probe, runs (start, list filtered by scenario and verdict
+  before the limit, the scenario names of the history, get, delete, cancel), live
+  progress as server-sent events read with `fetch` (past events are replayed to late subscribers), report
+  downloads as JSON, SARIF, JUnit and HTML, and starting and stopping the in-process demo shop (`--demo` starts it
+  at boot).
+- The web UI (`web/`, React 18, TypeScript, Vite, IBM Plex fonts bundled, CodeMirror 6 for YAML; embedded with
+  `go:embed`): Scenarios (workspace files with their last verdict, the demo examples with "Copy to workspace"),
+  Editor (live validation with markers at the error line, a problems list, the parsed summary, run options, Save
+  with Ctrl/Cmd+S, an unsaved-changes guard, a commented template for new scenarios), Run (live progress and
+  trials, then the verdict strip, trials table, the timeline of the selected trial with release line, pre-send
+  segment, exact values on hover or focus and the server arrival strip, the invariant with its evaluated terms, the
+  check response, setup and reset steps, the reproduce command and downloads), Runs (history with filters by
+  scenario and verdict), Probe and Import. Graphite dark theme with a light variant and a toggle, keyboard
+  navigation, visible focus, `aria-live` progress. Without the session token it shows how to open the link printed
+  by `photofinish serve`.
+- `internal/store`: the run history in SQLite (`<data>/photofinish.db`, WAL, schema versioned with
+  `PRAGMA user_version`) with the masked report of every run, ERROR included; `--data ""` or `--data :memory:`
+  keeps it in memory.
+- `runner.Options.OnProgress`: a structured callback with the resolved plan before the first trial, every masked
+  trial, and the overall verdict at the end. The text progress lines of `photofinish run` are unchanged.
+- `examples` is a Go package that embeds the example scenarios (`examples.FS`, `examples.Names()`).
+- `make ui` (`npm --prefix web ci` and `npm --prefix web run build`); `make build` works with or without it.
+- Playwright tests in `web/e2e` against the built binary with the in-process demo shop: copy the coupon examples,
+  find a YAML error at its line in the editor, run `coupon-vuln` (VIOLATED, timeline and failing terms) and
+  `coupon-fixed` (HELD) with 3 trials, download SARIF, the run history, probe the demo (recommends `h2`), import a
+  raw request, and the screen without a token.
+- CI: a `web` job (typecheck, the UI build, the binary with the UI, the Playwright tests); a smoke test of
+  `photofinish serve` without the UI in the `go` job (token, Host and Origin checks, the "UI not built" page); the
+  `docker` job also runs the README's `serve` command in a container and checks the embedded UI and the API.
 - Milestone M3: reports, Docker, the GitHub Action and the release pipeline.
 - `internal/report`: every report as JSON, SARIF 2.1.0, JUnit XML and a self-contained HTML page. SARIF has the
   rules `PF001` InvariantViolatedUnderConcurrency (error, a proven race) and `PF002` RaceTestInconclusive (warning),
@@ -96,3 +141,17 @@ All notable changes to this project are documented here. The format follows
 - `photofinish version` and `photofinish help`.
 - CI: gofmt, `go vet`, `go test -race`, build, and a smoke test that runs the demo and checks HTTP/2 and the
   fixed coupon endpoint.
+
+### Changed
+
+- `photofinish help` lists `serve`; it no longer says that the web UI arrives in M4.
+- `Dockerfile`: a `node:22-alpine` stage builds the web UI on the build platform before the Go build, so the image
+  contains it; the image also exposes 7340. The entrypoint is still `photofinish` and the default command `help`.
+- Release workflow: the web UI is built before the tests and the binaries, so every release archive and the image
+  contain it, and the smoke test checks that the Linux binary serves it.
+
+### Fixed
+
+- Durations of setup, check and reset steps are measured with the high-resolution clock. On Windows they were
+  taken from Go's monotonic clock, which advances in steps of up to half a millisecond, so fast local steps were
+  reported as 0.

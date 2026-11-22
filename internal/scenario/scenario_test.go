@@ -219,6 +219,13 @@ func TestParseErrors(t *testing.T) {
 		{"comment only", "# nothing\n", []string{"x.yaml: the file is empty"}},
 		{"not a mapping", "- a\n- b\n", []string{"x.yaml:1: a scenario must be a YAML mapping"}},
 		{"syntax", "version: 1\nname: [a\n", []string{"x.yaml:", "invalid YAML"}},
+		// yaml.v3 reports these one line early; the line must be the one
+		// with the problem, where the editor puts its marker.
+		{"tab in indentation", "version: 1\nrace:\n  engine: auto\n\tcopies: 20\n", []string{"x.yaml:4: invalid YAML: found a tab character"}},
+		{"unclosed quote in flow mapping", "version: 1\nname: a\nvars: { code: \"W10 }\nsetup: [\"a\"]\n", []string{"x.yaml:3: invalid YAML: did not find expected ',' or '}'"}},
+		{"unclosed flow mapping", "version: 1\nname: a\nvars: { code: W10\nsetup: []\n", []string{"x.yaml:3: invalid YAML: did not find expected ',' or '}'"}},
+		{"unclosed flow sequence", "version: 1\nsetup:\n  - request: GET /\n    expect_status: [200\n", []string{"x.yaml:4: invalid YAML: did not find expected ',' or ']'"}},
+		{"bad indentation", "version: 1\nrace:\n  engine: auto\n   copies: 20\n", []string{"x.yaml:4: invalid YAML: mapping values are not allowed"}},
 		{"two documents", "version: 1\n---\nversion: 1\n", []string{"x.yaml:2: only one YAML document"}},
 		{"unknown top field", "version: 1\ntrails: 3\n", []string{`x.yaml:2: trails: unknown field (did you mean "trials"?)`}},
 		{"unknown nested field", "race:\n  copis: 3\n", []string{`x.yaml:2: race.copis: unknown field (did you mean "copies"?)`}},

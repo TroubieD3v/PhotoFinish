@@ -11,8 +11,41 @@ Without `make`: `go build -o bin/photofinish ./cmd/photofinish`, `go vet ./...`,
 The binary needs no CGO, but the race detector of `go test -race` does: it needs CGO and a C compiler (gcc on
 Windows).
 Dependencies are `golang.org/x/net` (HTTP/2 framing), `cel.dev/cel-go` (invariants), `gopkg.in/yaml.v3` (scenarios)
-and `modernc.org/sqlite` (the demo shop; pure Go, no CGO). Code, comments and docs are in English;
-`README.ru.md` and `docs/DESIGN.ru.md` are the Russian documents.
+and `modernc.org/sqlite` (the demo shop and the run history of `serve`; pure Go, no CGO). Code, comments and docs
+are in English; `README.ru.md` and `docs/DESIGN.ru.md` are the Russian documents.
+
+## The web UI
+
+The UI lives in `web/` (React 18, TypeScript, Vite) and needs Node.js 22. `npm --prefix web run build` writes it to
+`internal/ui/dist/app`, which `go build` embeds; that directory is not committed. `internal/ui/dist/README.md` is,
+so the Go build and `go test` work without a UI build, and `serve` then answers with a page that says so.
+
+```bash
+make ui                                  # npm --prefix web ci && npm --prefix web run build
+make build                               # bin/photofinish with the UI embedded
+npm --prefix web run typecheck           # tsc --noEmit, as in CI
+npm --prefix web run dev                 # Vite on http://127.0.0.1:5173 (bound there), /api proxied to 127.0.0.1:7340
+```
+
+For `dev`, start `./bin/photofinish serve` in another terminal and open `http://127.0.0.1:5173/#token=<token>` with
+the token it printed (set `PHOTOFINISH_TOKEN` to keep the same one across restarts, and `PHOTOFINISH_API` to proxy
+to another address).
+
+The Playwright tests in `web/e2e` run the prebuilt `bin/photofinish` (`serve --addr 127.0.0.1:7341 --demo
+--demo-window 2ms --data :memory:` with a temporary workspace and a fixed test token; the 2 ms window makes the
+coupon-vuln race reproduce in every trial), so build the UI and the binary first:
+
+```bash
+make ui && make build
+(cd web && npx playwright install chromium)   # once
+npm --prefix web run test:e2e
+```
+
+They use the ports 7341 and 8443 (the demo shop). The runtime dependencies of the UI are React, `lucide-react`, the
+IBM Plex fonts (`@fontsource/ibm-plex-sans`, `@fontsource/ibm-plex-mono`, bundled, no CDN) and CodeMirror 6; the
+styles are hand-written CSS in the palette of the HTML report. Do not add a CSS framework or a component library,
+and keep the visual rules: graphite, 1px lines, 3-4px radii, 13px base, sentence case, no gradients, glow or
+emoji. Commit `web/package-lock.json` with every dependency change.
 
 ## Adding a demo scenario
 
@@ -41,7 +74,8 @@ SQLite errors must never reach a client: answer `500 {"error":"internal error"}`
 1. Add a section `## [X.Y.Z]` to `CHANGELOG.md` (the release notes come from it; without it the release fails).
 2. Tag the commit `vX.Y.Z` (or `vX.Y.Z-rc.1` for a prerelease) and push the tag. Only tags of that form start
    `.github/workflows/release.yml`.
-3. The workflow tests, builds the five archives and `checksums.txt`, smoke-tests the Linux binary against the demo,
+3. The workflow builds the web UI, tests, builds the five archives (with the UI embedded) and `checksums.txt`,
+   smoke-tests the Linux binary against the demo and its `serve` for the embedded UI,
    publishes the release and the image `ghcr.io/troubied3v/photofinish`, and moves the major tag (`v0`) that
    `uses: TroubieD3v/PhotoFinish@v0` follows to the new release. Prereleases and patches of an older minor version
    leave the major tag alone. Do not push the major tag by hand.

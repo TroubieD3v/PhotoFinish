@@ -89,6 +89,11 @@ type Options struct {
 	Stdout io.Writer
 	// Version is the tool version written to the report; "" means "dev".
 	Version string
+	// OnProgress receives structured progress events: "start" before the
+	// first trial, "trial" after each one and "done" at the end (see
+	// Progress). It may be nil. It is called from the goroutine running
+	// Run and must not block for long.
+	OnProgress func(Progress)
 }
 
 // Trial is one setup-race-check-reset cycle.
@@ -217,10 +222,12 @@ func Run(ctx context.Context, s *scenario.Scenario, opts Options) (*Report, erro
 		rep.Verdict, rep.Summary = Errored, err.Error()
 		rep.FinishedAt = time.Now()
 		rep.Reproduce = reproduce(s, opts, rep.Engine, 0, 0)
+		opts.notify(Progress{Phase: PhaseDone, Verdict: rep.Verdict})
 		return rep, nil
 	}
 	defer r.client.CloseIdleConnections()
 	rep.Engine, rep.Copies, rep.Stats.Planned = r.kind, r.copies, r.trials
+	opts.notify(Progress{Phase: PhaseStart, Planned: r.trials})
 
 	runErr := r.loop(ctx, rep)
 
@@ -233,6 +240,7 @@ func Run(ctx context.Context, s *scenario.Scenario, opts Options) (*Report, erro
 	rep.Reproduce = reproduce(s, opts, rep.Engine, r.trials, r.copies)
 	rep.FinishedAt = time.Now()
 	r.scrub(rep)
+	opts.notify(Progress{Phase: PhaseDone, Planned: r.trials, Done: len(rep.Trials), Verdict: rep.Verdict})
 	if runErr != nil && !isFatal(runErr) && ctx.Err() != nil {
 		return rep, ctx.Err()
 	}
@@ -356,6 +364,7 @@ func (r *run) loop(ctx context.Context, rep *Report) error {
 				// was sent, marked ERROR so that no count misses it.
 				t.Verdict, t.Reasons = Errored, []string{err.Error()}
 				rep.Trials = append(rep.Trials, t)
+				r.notifyTrial(t, len(rep.Trials))
 				return err
 			}
 			if errors.Is(err, errBudget) {
@@ -368,6 +377,7 @@ func (r *run) loop(ctx context.Context, rep *Report) error {
 		}
 		rep.Trials = append(rep.Trials, t)
 		r.progress(t)
+		r.notifyTrial(t, len(rep.Trials))
 	}
 	return nil
 }
@@ -781,33 +791,36 @@ func (r *run) scrub(rep *Report) {
 	rep.Summary = sc.str(rep.Summary)
 	sc.strs(rep.Notes)
 	rep.Target = sc.url(rep.Target)
-	steps := func(recs []StepRecord) {
-		for i := range recs {
-			scrubStep(sc, &recs[i])
-		}
-	}
 	for i := range rep.Trials {
-		t := &rep.Trials[i]
-		sc.strs(t.Reasons)
-		steps(t.Setup)
-		steps(t.Reset)
-		if t.Check != nil {
-			scrubStep(sc, t.Check)
-		}
-		for j := range t.Terms {
-			t.Terms[j].Expr = sc.str(t.Terms[j].Expr)
-			t.Terms[j].Value = sc.str(t.Terms[j].Value)
-		}
-		if t.Race != nil {
-			t.Race.Target = sc.url(t.Race.Target)
-			sc.strs(t.Race.Notes)
-			for j := range t.Race.Results {
-				res := &t.Race.Results[j]
-				res.Label = sc.str(res.Label)
-				res.Header = sc.header(res.Header)
-				res.Body = sc.body(res.Body)
-				res.Err = sc.str(res.Err)
-			}
+		scrubTrial(sc, &rep.Trials[i])
+	}
+}
+
+// scrubTrial masks one trial in place.
+func scrubTrial(sc *scrubber, t *Trial) {
+	sc.strs(t.Reasons)
+	for i := range t.Setup {
+		scrubStep(sc, &t.Setup[i])
+	}
+	for i := range t.Reset {
+		scrubStep(sc, &t.Reset[i])
+	}
+	if t.Check != nil {
+		scrubStep(sc, t.Check)
+	}
+	for j := range t.Terms {
+		t.Terms[j].Expr = sc.str(t.Terms[j].Expr)
+		t.Terms[j].Value = sc.str(t.Terms[j].Value)
+	}
+	if t.Race != nil {
+		t.Race.Target = sc.url(t.Race.Target)
+		sc.strs(t.Race.Notes)
+		for j := range t.Race.Results {
+			res := &t.Race.Results[j]
+			res.Label = sc.str(res.Label)
+			res.Header = sc.header(res.Header)
+			res.Body = sc.body(res.Body)
+			res.Err = sc.str(res.Err)
 		}
 	}
 }

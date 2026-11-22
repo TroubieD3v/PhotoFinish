@@ -1,6 +1,6 @@
 // Command photofinish is the PhotoFinish CLI: it runs race scenarios against
-// web APIs, probes targets, imports requests into scenario skeletons and
-// serves the intentionally vulnerable demo shop.
+// web APIs, probes targets, imports requests into scenario skeletons, serves
+// the intentionally vulnerable demo shop and serves the web UI.
 package main
 
 import (
@@ -45,6 +45,7 @@ Usage:
   photofinish probe <url> [--insecure]
   photofinish import <file> [--har-entry N] [--output scenario.yaml]
   photofinish demo [--addr 127.0.0.1:8443] [--window 0s] [--expose] [--quiet]
+  photofinish serve [--addr 127.0.0.1:7340] [--workspace DIR] [--data DIR] [--demo] [--expose] [--open]
   photofinish version
   photofinish help
 
@@ -59,14 +60,15 @@ Commands:
             scenario skeleton
   demo      start the demo shop over HTTPS with HTTP/2: every scenario exists as
             /vuln (check-then-act, intentionally racy) and /fixed (atomic)
+  serve     the web UI on loopback: edit, validate and run the scenarios of a
+            workspace, follow trials live, keep the run history, download
+            reports; the API needs the session token printed on start
   version   print the version
   help      show this text
 
 Run "photofinish <command> -h" for the flags of a command. Usage errors exit 64.
 Test only systems you own or are explicitly authorized to test.
-
-The serve command (web UI) arrives in milestone M4; see docs/DESIGN.ru.md for
-the design.
+The design is described in docs/DESIGN.ru.md.
 `
 
 const demoUsage = `Usage: photofinish demo [--addr 127.0.0.1:8443] [--window 0s] [--expose] [--quiet]
@@ -119,6 +121,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdImport(rest, stdout, stderr)
 	case "demo":
 		return cmdDemo(rest, stdout, stderr)
+	case "serve":
+		return cmdServe(rest, stdout, stderr)
 	case "version", "--version":
 		fmt.Fprintln(stdout, "photofinish", version)
 		return exitOK

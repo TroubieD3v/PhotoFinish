@@ -2,7 +2,7 @@
 
 > **PhotoFinish** proves race conditions in web APIs: it fires synchronized requests with the HTTP/2 single-packet attack, checks a business rule you declare, and keeps the evidence. One binary, CLI + web UI + CI.
 
-Статус: дизайн от 22.11.2026. Готовы этапы M0–M3: демо-магазин, движки, сценарии, инварианты и вердикты (команды `run`, `probe`, `import`, `demo`), отчёты JSON/SARIF/JUnit/HTML, Docker-образ, GitHub Action и конвейер релиза. Веб-интерфейс и первый релиз — этапы M4–M5.
+Статус: дизайн от 22.11.2026. Готовы этапы M0–M4: демо-магазин, движки, сценарии, инварианты и вердикты (команды `run`, `probe`, `import`, `demo`), отчёты JSON/SARIF/JUnit/HTML, Docker-образ, GitHub Action и конвейер релиза, веб-интерфейс и `photofinish serve`. Первый релиз — этап M5.
 
 ---
 
@@ -201,27 +201,60 @@ photofinish run scenario.yaml... [--engine h2] [--trials 20] [--copies 20] [--in
                                  [--fail-on violated|inconclusive|never] [--quiet]
 photofinish probe https://host/path [--insecure]   # TLS, ALPN, SETTINGS HTTP/2, RTT, заголовок прихода
 photofinish import burp.txt|file.har [--har-entry N] [--output scenario.yaml]
-photofinish serve                        # веб-интерфейс на 127.0.0.1:8080 (этап M4)
+photofinish serve [--addr 127.0.0.1:7340] [--workspace DIR] [--data DIR] [--demo]
+                  [--demo-addr 127.0.0.1:8443] [--demo-window 0s] [--expose] [--open]
+                                         # веб-интерфейс и локальный API
 photofinish demo                         # уязвимый магазин на 127.0.0.1:8443 (h2 + TLS)
 ```
 
 ### Веб-интерфейс
 
-Графитовая палитра как в остальных проектах. Ориентиры по виду: вкладка Network в DevTools (водопад) и Wireshark.
+`photofinish serve` — локальный API и встроенный интерфейс для файлов сценариев рабочего каталога (`--workspace`, по умолчанию текущий). При старте печатает ссылку `PhotoFinish UI: http://127.0.0.1:7340/#token=<token>`. История запусков — SQLite в `<data>/photofinish.db` (`--data`, по умолчанию каталог настроек пользователя `/photofinish`; `""` или `:memory:` — в памяти). `--demo` поднимает демо-магазин в том же процессе на `127.0.0.1:8443`, с боковой панели его можно запустить и остановить.
 
-1. **Scenarios** — список сценариев с последним вердиктом.
-2. **Editor**:
-   - слева сырой запрос, как в Repeater;
-   - справа шаги setup, check и reset;
-   - снизу инвариант с проверкой синтаксиса на лету.
-3. **Run** — главный экран:
-   - **сверху** полоса статуса: цель, движок, копии, попытки, бюджет;
-   - **слева** таблица попыток с вердиктом и разбросом;
-   - **в центре** таймлайн выбранной попытки: по строке на поток; отметки «предварительная отправка», «финальный кадр», «первый байт ответа»; линия общего `Write`;
-   - **справа** инвариант с вычисленными значениями и ответы.
-4. **Reports** — история запусков и экспорт.
+Вид — как у HTML-отчёта и макета [mockup-run.png](mockup-run.png): графитовая тёмная тема по умолчанию и светлая (по `prefers-color-scheme` и переключателю), IBM Plex Sans для интерфейса и Plex Mono для данных (шрифты в сборке, без CDN), базовый размер 13px, прямоугольные элементы со скруглением 3-4px, линии в 1px, без градиентов, свечения и теней (кроме меню), подписи с заглавной буквы только в начале, без эмодзи. Плотная раскладка рабочего инструмента. Ориентиры по виду — вкладка Network в DevTools (водопад) и Wireshark. Доступность: навигация с клавиатуры, видимый фокус, подписи у полей, прогресс запуска в `aria-live`, контраст AA.
 
-Макет экрана Run: [mockup-run.png](mockup-run.png).
+Раскладка: слева боковая панель (название, разделы Scenarios, Runs, Probe, Import, состояние демо-магазина с запуском и остановкой, путь рабочего каталога внизу), справа рабочая область. Маршруты в hash (`#/scenario?path=`, `#/run?id=`).
+
+1. **Scenarios** — таблица сценариев рабочего каталога: имя, файл, цель, движок, последний вердикт, время последнего запуска; файлы с ошибкой помечены, ошибка показана. Раздел «Examples for the demo shop» с кнопкой «Copy to workspace» (копия в `examples/<name>.yaml`). Кнопки New scenario и Import. Пустое состояние объясняет, что такое рабочий каталог, и предлагает скопировать примеры.
+2. **Editor** (`#/scenario?path=`):
+   - CodeMirror 6 с подсветкой YAML и номерами строк, тема собрана вручную из палитры;
+   - проверка на лету (через 300 мс после правки): разбор YAML, правила сценария и компиляция CEL-инварианта; ошибки отмечены на своей строке и собраны в список проблем;
+   - справа сводка (цель, scope, движок, копии, попытки, инвариант), параметры запуска (движок, попытки, копии, `insecure`, если сценарий не задаёт `tls.insecure`) и кнопка Run;
+   - Ctrl/Cmd+S сохраняет, при уходе с несохранёнными правками интерфейс переспрашивает; New scenario начинается с шаблона с комментариями; сохранение с `baseHash` не затирает чужую правку (409).
+3. **Run** (`#/run?id=`) — главный экран:
+   - **во время прогона** полоса прогресса и попытки по мере завершения (поток событий), кнопка Cancel;
+   - **сверху** полоса итога: вердикт, фраза-итог, движок, копии, финальные записи и байты, медианный разброс ответов и прихода на сервер, потраченные запросы;
+   - **таблица попыток** с выбором попытки;
+   - **таймлайн выбранной попытки** (SVG): строка на результат гонки с меткой, потоком и статусом; пунктирная линия release; полоса от release до первого байта ответа; штриховкой — предварительная отправка; подсказка с точными значениями в нс при наведении и фокусе; полоса прихода на сервер в мкс;
+   - **инвариант** с вычисленными термами (pass/fail и значения операндов), проверочный ответ (JSON, сворачивается), шаги setup и reset, команда для воспроизведения с кнопкой копирования, выгрузка JSON, SARIF, JUnit и HTML.
+4. **Runs** — история запусков с фильтрами по сценарию и вердикту, удаление завершённых.
+5. **Probe** — URL, переключатель insecure, карточка результата: TLS, ALPN, HTTP/2, SETTINGS, статусы, время ответа, заголовок прихода, рекомендуемый движок, замечания.
+6. **Import** — вставка сырого запроса или HAR (или перетаскивание файла), выбор записи HAR, просмотр получившегося YAML со списком TODO, «Save to workspace» открывает редактор.
+
+Без токена (или с неверным) интерфейс показывает экран «Session token missing: open the link printed by photofinish serve».
+
+API (JSON; всё, кроме `GET /api/health`, — с `Authorization: Bearer <token>`):
+
+| Маршрут | Что делает |
+|---|---|
+| `GET /api/health` | `{status, version}`, без токена |
+| `GET /api/info` | версия, рабочий каталог (абсолютный путь), демо `{running, url}`, каталог данных, id идущего запуска |
+| `GET /api/scenarios` | сценарии рабочего каталога с последним запуском и встроенные примеры |
+| `GET`, `PUT`, `DELETE /api/scenarios/file?path=` | чтение, создание или перезапись (`baseHash` против потерянных правок, 409), удаление |
+| `POST /api/scenarios/validate` | `{valid, errors:[{line, column?, field?, message}], scenario?}` |
+| `POST /api/examples/{name}/copy` | пример в `examples/<name>.yaml`, без перезаписи (409) |
+| `POST /api/import` | сырой запрос или HAR в YAML со списком TODO |
+| `POST /api/probe` | ProbeReport в JSON с именами в camelCase (`tlsVersion`, `recommended`, …), круговые задержки — `rttsNs` в наносекундах |
+| `POST /api/runs` | запуск в отдельной горутине, 202 `{id}`; второй одновременный — 409 с id идущего |
+| `GET /api/runs?scenario=&verdict=&limit=`, `GET`, `DELETE /api/runs/{id}`, `POST /api/runs/{id}/cancel` | история (фильтры применяются до лимита), запуск с отчётом, удаление завершённого, отмена |
+| `GET /api/runs/scenarios` | имена сценариев из истории для фильтра экрана Runs |
+| `GET /api/runs/{id}/events` | `text/event-stream` событий прогресса (`event: progress`), прошлые события повторяются для поздних подписчиков, в конце `event: done`; интерфейс читает поток через `fetch`, а не `EventSource`, чтобы токен не попадал в URL |
+| `GET /api/runs/{id}/report.{json,sarif,junit,html}` | выгрузка с `Content-Disposition: attachment` |
+| `POST /api/demo/start`, `POST /api/demo/stop` | демо-магазин в том же процессе |
+
+Остальные пути отдают SPA (`index.html`); без сборки интерфейса — простую страницу о том, что интерфейс не собран (`make ui`).
+
+Прогресс приходит из runner через `runner.Options.OnProgress`: событие `start` с планом до первой попытки, `trial` после каждой попытки (замаскированной, как в отчёте), `done` с общим вердиктом. Текстовый вывод `photofinish run` не изменился.
 
 ### CI
 
@@ -231,9 +264,9 @@ photofinish demo                         # уязвимый магазин на 
   - один прогон с `--out` во временный каталог, копирует SARIF, JUnit и HTML по путям из входов, пишет таблицу «сценарий | вердикт | итог» в сводку задания;
   - выходы `verdict` (самый серьёзный вердикт), `exit-code`, `report-dir`; последний шаг завершается с кодом по правилу `fail-on`;
   - загрузку SARIF в code scanning пользователь добавляет сам (`github/codeql-action/upload-sarif`, право `security-events: write`).
-- **Docker-образ** `ghcr.io/troubied3v/photofinish`: distroless `static-debian12:nonroot`, без root, `ENTRYPOINT ["photofinish"]`, рабочий каталог `/work`; многоплатформенный (linux/amd64, linux/arm64), сборка кросс-компиляцией без эмуляции. Демо в контейнере: `demo --addr 0.0.0.0:8443 --expose` с публикацией `-p 127.0.0.1:8443:8443`.
-- **CI самого проекта:** задания `go` (gofmt, vet, `test -race`, сборка, `version`, smoke-тест демо), `examples` (все примеры против демо: `-fixed` дают 0, `-vuln` дают 1, SARIF проверяется по официальной схеме, JUnit и HTML разбираются), `action` (action из checkout проходит на `-fixed`, падает с VIOLATED на `coupon-vuln`, с `fail-on: never` только отчитывается), `docker` (сборка образа, демо и сценарий в контейнерах). Находки демо остаются артефактами и не попадают в code scanning репозитория.
-- **Релиз** по тегу версии `vX.Y.Z` (или `vX.Y.Z-pre`; переносимый тег `v0` релиз не запускает): тесты, бинарники для пяти платформ с README и LICENSE, `checksums.txt`, smoke-тест Linux-бинарника против демо, заметки из раздела `## [X.Y.Z]` в CHANGELOG.md (без раздела релиз падает), образ с тегами `X.Y.Z`, `X.Y`, `latest` и OCI-метками; для нового релиза без суффикса workflow переносит тег `v0` (мажорный) на него, если это новейший v0.x.y.
+- **Docker-образ** `ghcr.io/troubied3v/photofinish`: distroless `static-debian12:nonroot`, без root, `ENTRYPOINT ["photofinish"]`, `CMD ["help"]`, рабочий каталог `/work`; многоплатформенный (linux/amd64, linux/arm64), сборка кросс-компиляцией без эмуляции. Интерфейс собирает отдельная стадия `node:22-alpine` на платформе сборки, Go-стадия встраивает результат. Демо в контейнере: `demo --addr 0.0.0.0:8443 --expose` с публикацией `-p 127.0.0.1:8443:8443`; интерфейс: `serve --addr 0.0.0.0:7340 --expose --workspace /work --data /tmp/pf` с `-p 127.0.0.1:7340:7340` и `-e PHOTOFINISH_TOKEN`.
+- **CI самого проекта:** задания `go` (gofmt, vet, `test -race`, сборка без интерфейса, `version`, smoke-тесты демо и `serve`: токен, проверки Host и Origin, страница «интерфейс не собран»), `web` (Node 22, `npm --prefix web ci`, typecheck, сборка интерфейса, бинарник с интерфейсом, Playwright e2e), `examples` (все примеры против демо: `-fixed` дают 0, `-vuln` дают 1, SARIF проверяется по официальной схеме, JUnit и HTML разбираются), `action` (action из checkout проходит на `-fixed`, падает с VIOLATED на `coupon-vuln`, с `fail-on: never` только отчитывается), `docker` (сборка образа, демо и сценарий в контейнерах, `serve` в контейнере отдаёт встроенный интерфейс и API). Находки демо остаются артефактами и не попадают в code scanning репозитория.
+- **Релиз** по тегу версии `vX.Y.Z` (или `vX.Y.Z-pre`; переносимый тег `v0` релиз не запускает): сначала сборка интерфейса, затем тесты, бинарники для пяти платформ со встроенным интерфейсом, README и LICENSE, `checksums.txt`, smoke-тест Linux-бинарника против демо и проверка, что его `serve` отдаёт интерфейс, заметки из раздела `## [X.Y.Z]` в CHANGELOG.md (без раздела релиз падает), образ с тегами `X.Y.Z`, `X.Y`, `latest` и OCI-метками; для нового релиза без суффикса workflow переносит тег `v0` (мажорный) на него, если это новейший v0.x.y.
 
 ## 10. Демо-цель: уязвимый магазин
 
@@ -255,29 +288,36 @@ photofinish demo                         # уязвимый магазин на 
 - **Scope.** Хост вне `allow_hosts` блокируется до соединения. Редиректы не выполняются автоматически.
 - **Бюджет.** Общий лимит запросов и скорость, жёсткий стоп.
 - **Маскировка.** Заголовки `Authorization`, `Cookie` и `Set-Cookie`, токены в теле.
-- **`serve` слушает только 127.0.0.1.** Доступ по случайному токену, защита от CSRF и DNS rebinding (проверка `Host`/`Origin`).
+- **`serve` слушает только loopback.** Сервер по запросу шлёт атакующий трафик, поэтому страницы в браузере не должны им управлять:
+  - адрес не на loopback только с `--expose` (иначе ошибка использования 64) и с предупреждением;
+  - токен сессии: 32 случайных байта в hex или `PHOTOFINISH_TOKEN` (не короче 32 символов); печатается один раз во фрагменте ссылки, интерфейс переносит его в `sessionStorage` и убирает из адресной строки через `history.replaceState`; каждому `/api/` нужен `Authorization: Bearer`, сравнение за постоянное время, иначе 401; cookies нет;
+  - `Host` только `127.0.0.1:<port>`, `localhost:<port>` или `[::1]:<port>` (с `--expose` любой), иначе 421/403 — защита от DNS rebinding; запись с чужим `Origin` — 403;
+  - на всех ответах CSP `default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`, `nosniff`, `no-referrer`, на API `no-store`;
+  - файлы только внутри рабочего каталога: `*.yaml`/`*.yml`, относительные пути с `/`, без `..` и абсолютных путей, символические ссылки наружу отклоняются, файл до 256 КиБ, обход на 4 уровня и до 500 файлов без каталогов с точкой, `node_modules` и `vendor`; тело запроса до 1 МиБ;
+  - одна гонка за раз, отмена; scope сценария по-прежнему проверяет runner, сервер не добавляет обходов.
+  Модель угроз — в SECURITY.md.
 - **SECURITY.md и README** с оговоркой: только для систем, где тестирование разрешено.
 
 ## 12. Архитектура
 
 Стек как у CloudGraph:
 - Go 1.27, `golang.org/x/net/http2`, `cel-go`, `yaml.v3`, `modernc.org/sqlite`;
-- React + Vite + Tailwind 4, IBM Plex, встроенный через `go:embed`.
+- React 18 + TypeScript + Vite, CSS написан вручную (без Tailwind и библиотек компонентов), IBM Plex через `@fontsource`, `lucide-react`, CodeMirror 6; сборка встроена через `go:embed` (`internal/ui`, `//go:embed all:dist`, в репозитории только `dist/README.md`, `dist/app` в `.gitignore`).
 
 ```
 cmd/photofinish/          CLI (run, probe, import, serve, demo)
-internal/engine/          h2 (single-packet), h1 (last-byte), burst, auto
-internal/h2wire/          фреймер, буферизация финальных кадров, PING-прогрев
-internal/scenario/        YAML, шаблоны {{}}, extract (JSONPath/regex), импорт Burp/HAR
-internal/check/           CEL-окружение, объяснение вычисления
-internal/runner/          trials, вердикты, бюджет, scope
-internal/evidence/        модель доказательств, маскировка
+internal/engine/          h2 (single-packet, свой фреймер), h1 (last-byte), burst, auto, probe
+internal/clock/           часы высокого разрешения для X-Arrival-Ns
+internal/scenario/        YAML, шаблоны {{}}, extract, проверка, импорт Burp/HAR
+internal/check/           CEL-окружение, вычисление термов
+internal/runner/          trials, вердикты, бюджет, scope, маскировка, OnProgress
 internal/report/          json, html, sarif, junit
-internal/server/          API для UI, хранение запусков (SQLite)
+internal/store/           история запусков (SQLite)
+internal/server/          локальный API для интерфейса
+internal/ui/              встроенная сборка интерфейса (dist/app)
 internal/demo/            уязвимый магазин
-internal/ui/dist/         собранный фронтенд
-web/                      React-приложение
-examples/                 готовые сценарии для демо-магазина
+web/                      React-приложение и Playwright e2e (web/e2e)
+examples/                 готовые сценарии для демо-магазина, встроены в бинарник (examples.FS)
 ```
 
 ## 13. Тестирование
@@ -291,8 +331,9 @@ examples/                 готовые сценарии для демо-маг
   - на `/vuln` движок `h2` находит нарушение за T попыток;
   - на `/fixed` за те же T попыток нарушений нет;
   - то же с nginx и Caddy перед приложением.
-- **Бенчмарк (docs/BENCHMARKS.md):** доля попыток с нарушением и разброс для `h2`, `h1` и `burst` на одной цели. Это главная цифра для README и статьи.
-- **E2E UI на Playwright:** скриншоты и GIF для README, как в остальных проектах.
+- **Бенчмарк ([BENCHMARKS.md](../BENCHMARKS.md), workflow Benchmark):** доля попыток с нарушением и разброс для `h2`, `h1` и `burst` на одной цели. Это главная цифра для README и статьи.
+- **Сервер (httptest):** токен обязателен, неверный токен, проверки Host (в том числе хосты в духе rebinding), Origin на записи, CSP, попытки выйти из рабочего каталога (`../`, `..\`, абсолютные пути, `C:/`, кодированные пути, символическая ссылка наружу), ограничения размеров, одна гонка за раз, отмена, порядок повтора событий SSE, прогон против демо-магазина в том же процессе (vuln-пример VIOLATED, fixed — HELD за 3 попытки), выгрузка отчётов во всех форматах, хранилище.
+- **E2E UI на Playwright** (`web/e2e`, собранный `bin/photofinish serve --addr 127.0.0.1:7341 --demo --demo-window 2ms --data :memory:` с временным рабочим каталогом и фиксированным тестовым токеном): копирование примеров coupon-vuln и coupon-fixed, ошибка YAML на нужной строке в редакторе и её исправление, coupon-vuln за 3 попытки — VIOLATED с таймлайном и проваленными термами, coupon-fixed — HELD, выгрузка SARIF, оба запуска в истории, probe демо-магазина советует `h2`, импорт сырого запроса даёт YAML со списком TODO, без токена — экран токена, без ошибок в консоли. Скриншоты и GIF для README — этап M5.
 
 ## 14. Этапы
 
@@ -302,7 +343,7 @@ examples/                 готовые сценарии для демо-маг
 | M1 | движки `h2`, `h1`, `burst`, команда `probe` | `h2` стабильно ловит купон на `/vuln`, бенчмарк показывает разницу движков |
 | M2 | сценарии, CEL, trials, вердикты, JSON-доказательства | `photofinish run examples/*.yaml` даёт верные вердикты на `/vuln` и `/fixed` |
 | M3 | SARIF, JUnit, HTML, Docker, GitHub Action | Action роняет сборку на `/vuln` (в CI это проверяет задание `action`) |
-| M4 | веб-интерфейс (Scenarios, Editor, Run, Reports) | сценарий собирается и запускается из UI, таймлайн показывает попытки |
+| M4 | веб-интерфейс (Scenarios, Editor, Run, Runs, Probe, Import) и `photofinish serve` | сценарий собирается и запускается из UI, таймлайн показывает попытки (в CI это проверяет задание `web`) |
 | M5 | документация EN/RU, скриншоты, GIF, релиз v0.1.0, статья | релиз опубликован, лаборатория-гонка в WebSec-Lab |
 
 ## 15. Не входит в v0.1

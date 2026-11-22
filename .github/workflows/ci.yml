@@ -55,6 +55,94 @@ jobs:
           echo "coupon on /fixed: first apply $first, second apply $second"
           if [ "$first" != "200" ] || [ "$second" != "409" ]; then cat demo.log; exit 1; fi
 
+      # photofinish serve from a build without the UI: the API answers, the token,
+      # Host and Origin checks hold, and / says that the UI was not built. The token
+      # is a fixed test value, not a secret.
+      - name: Serve smoke test without the UI
+        env:
+          PHOTOFINISH_TOKEN: ci-serve-smoke-test-0123456789abcdef0123456789abcdef
+        run: |
+          set -euo pipefail
+          mkdir -p serve-workspace
+          ./photofinish serve --addr 127.0.0.1:17340 --workspace serve-workspace --data :memory: > serve.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          base=http://127.0.0.1:17340
+          for i in $(seq 1 30); do curl -fsS -o /dev/null "$base/api/health" && break; sleep 1; done
+          curl -fsS "$base/api/health" | grep -q '"status"' || { echo "no health answer"; cat serve.log; exit 1; }
+          grep -qF "PhotoFinish UI: $base/#token=$PHOTOFINISH_TOKEN" serve.log || { echo "no UI link printed"; cat serve.log; exit 1; }
+          status() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+          auth="Authorization: Bearer $PHOTOFINISH_TOKEN"
+          expect() {
+            local want=$1 got=$2 what=$3
+            case " $want " in
+              *" $got "*) echo "$what: $got" ;;
+              *) echo "$what: expected $want, got $got"; cat serve.log; exit 1 ;;
+            esac
+          }
+          expect 200 "$(status -H "$auth" "$base/api/info")" "info with the token"
+          expect 401 "$(status "$base/api/info")" "info without a token"
+          expect 401 "$(status -H 'Authorization: Bearer wrong-token-0123456789abcdef0123456789' "$base/api/info")" "info with a wrong token"
+          expect "421 403" "$(status -H "$auth" -H 'Host: rebind.invalid:17340' "$base/api/info")" "info with a foreign Host"
+          expect 403 "$(status -X POST -H "$auth" -H 'Origin: https://attacker.invalid' \
+            -H 'Content-Type: application/json' -d '{}' "$base/api/demo/stop")" "write with a foreign Origin"
+          curl -sS -D headers.txt -o index.txt "$base/"
+          grep -qi '^content-security-policy:.*frame-ancestors' headers.txt || { echo "no CSP on /"; cat headers.txt; exit 1; }
+          grep -q 'make ui' index.txt || { echo "/ does not say that the UI was not built:"; cat index.txt; exit 1; }
+      - name: Serve log
+        if: failure()
+        run: cat serve.log || true
+
+  web:
+    # The web UI: typecheck, the production build embedded into the binary, and
+    # the Playwright tests against that binary (web/playwright.config.ts starts
+    # bin/photofinish serve with the in-process demo shop).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm --prefix web ci
+      - run: npm --prefix web run typecheck
+      - run: npm --prefix web run build
+      - name: Build the binary with the UI
+        run: go build -o bin/photofinish ./cmd/photofinish
+      - name: The binary serves the built UI
+        env:
+          PHOTOFINISH_TOKEN: ci-web-smoke-test-0123456789abcdef0123456789abcdef
+        run: |
+          set -euo pipefail
+          mkdir -p web-smoke-workspace
+          ./bin/photofinish serve --addr 127.0.0.1:17340 --workspace web-smoke-workspace --data :memory: > serve.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          base=http://127.0.0.1:17340
+          for i in $(seq 1 30); do curl -fsS -o /dev/null "$base/api/health" && break; sleep 1; done
+          curl -fsS "$base/" > index.html || { cat serve.log; exit 1; }
+          if ! grep -q 'type="module"' index.html || grep -q 'make ui' index.html; then
+            echo "/ is not the built UI:"; cat index.html; exit 1
+          fi
+          # Unknown non-API paths get the SPA too.
+          curl -fsS "$base/runs" | grep -q 'type="module"' || { echo "no SPA fallback"; exit 1; }
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - run: npm run test:e2e
+        working-directory: web
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-results
+          path: |
+            web/test-results/
+            web/playwright-report/
+          if-no-files-found: ignore
+
   examples:
     # Every example against the demo shop, with the exit codes and reports a
     # pipeline would see.
@@ -241,8 +329,8 @@ jobs:
         run: cat demo.log || true
 
   docker:
-    # The README's Docker usage: build the image, run the demo shop in one
-    # container and a scenario in another.
+    # The README's Docker usage: build the image (with the UI stage), run the
+    # demo shop in one container and a scenario in another, and the web UI.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -270,9 +358,40 @@ jobs:
         run: |
           set -euo pipefail
           docker run --rm --network host -v "$PWD/examples:/work/examples:ro" photofinish run examples/coupon-fixed.yaml
+
+      # The README's web UI command. The token is a fixed test value, not a secret.
+      - name: Web UI in a container
+        env:
+          PHOTOFINISH_TOKEN: ci-docker-serve-test-0123456789abcdef0123456789abcdef
+        run: |
+          set -euo pipefail
+          docker run -d --name pf-ui -p 127.0.0.1:7340:7340 -e PHOTOFINISH_TOKEN -v "$PWD:/work" \
+            photofinish serve --addr 0.0.0.0:7340 --expose --workspace /work --data /tmp/pf
+          base=http://127.0.0.1:7340
+          ready=false
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null "$base/api/health"; then ready=true; break; fi
+            if [ "$(docker inspect -f '{{.State.Running}}' pf-ui)" != true ]; then break; fi
+            sleep 1
+          done
+          if [ "$ready" != true ]; then echo "the UI container did not start within 30s"; docker logs pf-ui; exit 1; fi
+          curl -fsS "$base/" > index.html
+          if ! grep -q 'type="module"' index.html || grep -q 'make ui' index.html; then
+            echo "/ is not the embedded UI:"; cat index.html; docker logs pf-ui; exit 1
+          fi
+          auth="Authorization: Bearer $PHOTOFINISH_TOKEN"
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$base/api/info")
+          if [ "$code" != 401 ]; then echo "info without a token: expected 401, got $code"; exit 1; fi
+          curl -fsS -H "$auth" "$base/api/info" | grep -q '"/work"' || { echo "info does not name the workspace /work"; docker logs pf-ui; exit 1; }
+          curl -fsS -H "$auth" "$base/api/scenarios" | grep -q 'examples/coupon-vuln.yaml' \
+            || { echo "the mounted examples are not listed"; docker logs pf-ui; exit 1; }
+          curl -fsS -o /dev/null -H "$auth" "$base/api/runs" || { echo "the run history in /tmp/pf does not answer"; docker logs pf-ui; exit 1; }
       - name: Demo container log
         if: failure()
         run: docker logs pf-demo || true
-      - name: Remove the demo container
+      - name: UI container log
+        if: failure()
+        run: docker logs pf-ui || true
+      - name: Remove the containers
         if: always()
-        run: docker rm -f pf-demo > /dev/null 2>&1 || true
+        run: docker rm -f pf-demo pf-ui > /dev/null 2>&1 || true
