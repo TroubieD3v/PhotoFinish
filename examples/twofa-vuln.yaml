@@ -1,0 +1,48 @@
+# 2FA attempt limit, against the racy /vuln variant of the demo shop.
+#
+#   photofinish demo                              # terminal 1
+#   photofinish run examples/twofa-vuln.yaml      # terminal 2: expect VIOLATED (exit 1)
+#
+# The limit is 3 attempts. The handler reads the attempt counter, compares the
+# code and only then increments the counter, so ten guesses sent together are
+# all compared: a brute force gets more tries than the limit allows.
+version: 1
+name: twofa-vuln
+description: >
+  At most 3 codes may be compared per user before the account locks, no
+  matter how many guesses arrive at once.
+target: https://127.0.0.1:8443/vuln/api
+tls:
+  insecure: true # the demo shop uses a fresh self-signed certificate
+scope:
+  allow_hosts: [127.0.0.1:8443]
+  budget: { requests: 1000, rps: 50 }
+identities:
+  # The demo's public throwaway token, written literally. Real scenarios read
+  # secrets from the environment: "Bearer ${env:ALICE_TOKEN}".
+  alice: { headers: { Authorization: "Bearer demo-alice" } }
+setup:
+  - id: reset # restore the seed state: no attempts used yet
+    request: POST /reset
+    expect_status: [200]
+race:
+  engine: auto
+  copies: 10
+  # The lockout answers 429 "too many attempts" to the surplus guesses: that
+  # is the defence under test, not a rate limit in front of the target.
+  expect_429: true
+  request:
+    as: alice
+    raw: |
+      POST /2fa/verify HTTP/2
+      Content-Type: application/json
+
+      {"code":"000000"}
+check:
+  as: alice
+  request: GET /2fa/status
+  invariant: >
+    check.json.checks <= check.json.limit &&
+    size(race.filter(r, r.status == 401)) <= 3
+  explain: At most 3 two-factor codes may be compared before the lockout.
+trials: 10

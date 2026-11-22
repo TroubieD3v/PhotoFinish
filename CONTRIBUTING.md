@@ -8,7 +8,10 @@ go run ./cmd/photofinish demo    # the demo shop on https://127.0.0.1:8443
 ```
 
 Without `make`: `go build -o bin/photofinish ./cmd/photofinish`, `go vet ./...`, `go test -race ./...`.
-The only dependency is `modernc.org/sqlite` (pure Go, no CGO). Code, comments and docs are in English;
+The binary needs no CGO, but the race detector of `go test -race` does: it needs CGO and a C compiler (gcc on
+Windows).
+Dependencies are `golang.org/x/net` (HTTP/2 framing), `cel.dev/cel-go` (invariants), `gopkg.in/yaml.v3` (scenarios)
+and `modernc.org/sqlite` (the demo shop; pure Go, no CGO). Code, comments and docs are in English;
 `README.ru.md` and `docs/DESIGN.ru.md` are the Russian documents.
 
 ## Adding a demo scenario

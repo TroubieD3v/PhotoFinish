@@ -1,0 +1,45 @@
+# Transfer overdraft, against the atomic /fixed variant of the demo shop.
+#
+#   photofinish demo                              # terminal 1
+#   photofinish run examples/transfer-fixed.yaml  # terminal 2: expect HELD (exit 0)
+#
+# The same race as transfer-vuln.yaml. Here the debit is
+# "UPDATE ... WHERE balance_cents >= ?" inside a transaction: one transfer
+# answers 200, the others 409 "insufficient funds".
+version: 1
+name: transfer-fixed
+description: >
+  A transfer may only spend money the sender has. With a balance of 100.00,
+  at most one of twenty synchronized 60.00 transfers can succeed.
+target: https://127.0.0.1:8443/fixed/api
+tls:
+  insecure: true # the demo shop uses a fresh self-signed certificate
+scope:
+  allow_hosts: [127.0.0.1:8443]
+  budget: { requests: 1000, rps: 50 }
+identities:
+  # The demo's public throwaway token, written literally. Real scenarios read
+  # secrets from the environment: "Bearer ${env:ALICE_TOKEN}".
+  alice: { headers: { Authorization: "Bearer demo-alice" } }
+setup:
+  - id: reset # restore the seed state: alice and bob have 100.00 each
+    request: POST /reset
+    expect_status: [200]
+race:
+  engine: auto
+  copies: 20
+  request:
+    as: alice
+    raw: |
+      POST /transfers HTTP/2
+      Content-Type: application/json
+
+      {"to":"bob","amount_cents":6000}
+check:
+  as: alice
+  request: GET /me
+  invariant: >
+    check.json.balance_cents >= 0 &&
+    size(race.filter(r, r.status == 200)) <= 1
+  explain: A balance must never go below zero; 100.00 covers one 60.00 transfer.
+trials: 10

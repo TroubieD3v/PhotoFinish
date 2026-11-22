@@ -1,0 +1,50 @@
+# Coupon applied twice, against the racy /vuln variant of the demo shop.
+#
+#   photofinish demo                              # terminal 1
+#   photofinish run examples/coupon-vuln.yaml     # terminal 2: expect VIOLATED (exit 1)
+#
+# The handler counts the code on the cart in one statement and inserts the
+# discount in another, so copies that arrive together all pass the check.
+version: 1
+name: coupon-vuln
+description: >
+  WELCOME10 is a single-use coupon. Twenty synchronized applications to one
+  cart must still leave exactly one discount on it.
+target: https://127.0.0.1:8443/vuln/api
+tls:
+  insecure: true # the demo shop uses a fresh self-signed certificate
+scope:
+  allow_hosts: [127.0.0.1:8443]
+  budget: { requests: 1000, rps: 50 }
+identities:
+  # The demo's public throwaway token, written literally. Real scenarios read
+  # secrets from the environment: "Bearer ${env:ALICE_TOKEN}".
+  alice: { headers: { Authorization: "Bearer demo-alice" } }
+vars: { code: WELCOME10 }
+setup:
+  - id: reset # restore the seed state so that every trial starts the same
+    request: POST /reset
+    expect_status: [200]
+  - id: cart
+    as: alice
+    request: POST /carts
+    expect_status: [201]
+    extract: { cart_id: "$.id" }
+race:
+  engine: auto
+  copies: 20
+  request:
+    as: alice
+    raw: |
+      POST /carts/{{cart_id}}/coupons HTTP/2
+      Content-Type: application/json
+
+      {"code":"{{code}}"}
+check:
+  as: alice
+  request: GET /carts/{{cart_id}}
+  invariant: >
+    size(check.json.discounts) <= 1 &&
+    size(race.filter(r, r.status == 200)) <= 1
+  explain: A single-use coupon must apply at most once per cart.
+trials: 10

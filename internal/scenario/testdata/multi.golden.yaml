@@ -1,0 +1,51 @@
+version: 1
+name: transfer-double-spend
+target: http://Shop.Example.test/api/
+scope:
+  allow_hosts: [shop.example.test]
+identities:
+  alice:
+    headers:
+      Authorization: Bearer demo-alice
+      X-Request-Source: photofinish
+  bob:
+    headers:
+      Authorization: Bearer demo-bob
+vars:
+  amount: "7000"
+  note: say "hi"
+setup:
+  - id: reset
+    request: |
+      POST /reset HTTP/1.1
+      X-Reason: trial
+  - id: me
+    as: alice
+    request: GET /me?fields=balance
+    expect_status: [200, 203]
+    extract:
+      before: $.balance_cents
+      code: status
+      variant: header:X-PhotoFinish-Variant
+race:
+  engine: burst
+  requests:
+    - as: alice
+      request: POST /transfers
+      json:
+        to: bob
+        amount_cents: 7000
+        memo: "{{note}} {{before}}"
+        tags: [a, "1", true, null, 1.5]
+      copies: 3
+    - as: bob
+      request: GET /me
+check:
+  as: alice
+  request: GET /me
+  invariant: check.json.balance_cents >= 0
+reset:
+  - id: cleanup
+    request: POST /reset
+evidence:
+  arrival_header: '-'

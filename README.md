@@ -5,12 +5,202 @@
 PhotoFinish proves race conditions in web APIs: synchronized requests via the HTTP/2 single-packet attack, a
 business rule you declare, and the evidence.
 
-Pre-alpha: milestone M0 - the demo target. The engines and scenarios arrive in M1-M2.
+Pre-alpha: M1-M2 — engines, scenarios and verdicts work; reports, UI and release arrive in M3-M5.
 
 > **Note**: test only systems you own or are explicitly authorized to test. The demo shop in this repository is
 > intentionally vulnerable and listens on loopback only. See [SECURITY.md](SECURITY.md).
 
 ## What exists now
+
+| Command | Does |
+|---|---|
+| `photofinish run <scenario.yaml>...` | runs scenarios: setup, a synchronized race, a check request and an invariant, repeated for every trial; prints a verdict and writes JSON evidence |
+| `photofinish probe <url>` | inspects a target (TLS, ALPN, HTTP/2 settings, round trips, arrival header) and recommends an engine |
+| `photofinish import <file>` | turns a raw HTTP request (Burp, DevTools) or a HAR entry into a scenario skeleton |
+| `photofinish demo` | starts a shop over HTTPS with HTTP/2 whose four scenarios exist in a racy and a fixed variant |
+
+The engines:
+
+| Engine | How the requests are sent |
+|---|---|
+| `h2` | HTTP/2 single-packet attack: one connection; every request is sent except its last byte (or the empty final DATA frame), then the final frames of all streams leave in one write, one TLS record (about 100 streams fit in one write; larger races are split into several writes of at most 1200 bytes and the report notes it) |
+| `h1` | HTTP/1.1 last-byte sync: one connection per request, everything but the last byte, then the last bytes in a tight loop |
+| `burst` | plain concurrent requests without synchronization, the baseline the other two are compared to |
+| `auto` | `h2` if the server negotiates it via ALPN, else `h1` |
+
+## Quick start
+
+Requires Go 1.27+. The binary needs no CGO and no other services.
+
+```bash
+git clone https://github.com/TroubieD3v/PhotoFinish.git
+cd PhotoFinish
+make build            # or: go build -o bin/photofinish ./cmd/photofinish
+```
+
+`make test` runs `go vet` and the tests with the race detector, which needs CGO and a C compiler.
+
+## Run a race
+
+Start the demo shop in one terminal:
+
+```bash
+./bin/photofinish demo
+```
+
+In another, run the coupon scenario against the racy variant. [examples/coupon-vuln.yaml](examples/coupon-vuln.yaml)
+resets the shop, creates a cart, applies the single-use coupon `WELCOME10` twenty times in one packet and then
+checks that the cart has at most one discount:
+
+```bash
+./bin/photofinish run examples/coupon-vuln.yaml --out reports
+```
+
+```text
+run examples/coupon-vuln.yaml
+trial 1/10: HELD (1 of 20 succeeded) spread 1.05ms
+trial 2/10: VIOLATED (3 of 20 succeeded) spread 0.77ms
+trial 3/10: HELD (1 of 20 succeeded) spread 1.03ms
+trial 4/10: VIOLATED (4 of 20 succeeded) spread 0.83ms
+trial 5/10: VIOLATED (2 of 20 succeeded) spread 0.78ms
+trial 6/10: VIOLATED (4 of 20 succeeded) spread 0.98ms
+trial 7/10: VIOLATED (5 of 20 succeeded) spread 0.87ms
+trial 8/10: HELD (1 of 20 succeeded) spread 1.11ms
+trial 9/10: VIOLATED (4 of 20 succeeded) spread 0.81ms
+trial 10/10: VIOLATED (4 of 20 succeeded) spread 0.71ms
+coupon-vuln: VIOLATED
+  7 of 10 trials broke the rule (h2, median response spread 0.85 ms)
+  rule       A single-use coupon must apply at most once per cart.
+  invariant  size(check.json.discounts) <= 1 && size(race.filter(r, r.status == 200)) <= 1
+  target     https://127.0.0.1:8443/vuln/api (engine h2, 20 copies)
+  trials     10 run: 7 violated, 3 held
+  timing     median response spread 0.85 ms, server arrival spread 0.35 ms
+  failing terms in trial 2:
+    FAIL  size(check.json.discounts) <= 1    (3 <= 1)
+    FAIL  size(race.filter(r, r.status == 200)) <= 1    (3 <= 1)
+  reproduce  photofinish run examples/coupon-vuln.yaml --engine h2 --trials 10 --copies 20
+  report     reports/coupon-vuln.json
+```
+
+The exit code is 1 (VIOLATED). `reports/coupon-vuln.json` holds the evidence of every trial: the setup and check
+responses, every race response with its timestamps (pre-send, release, first byte, and the server arrival time
+from `X-Arrival-Ns`), the value of every term of the invariant, and the command that reproduces the run. Secrets
+are masked.
+
+Run the same race against the atomic variant and the verdict is HELD (exit code 0):
+
+```bash
+./bin/photofinish run examples/coupon-fixed.yaml
+```
+
+HELD means "not reproduced in N trials" with the measured spread, never "safe". `examples/` has both variants of
+all four demo scenarios; `./bin/photofinish run examples/*.yaml` runs them all.
+
+| Flag | Meaning |
+|---|---|
+| `--engine auto\|h2\|h1\|burst` | override `race.engine` |
+| `--trials N`, `--copies N` | override `trials` and `race.copies` |
+| `--insecure` | skip TLS certificate verification (like `tls.insecure`) |
+| `--out DIR` | write `DIR/<scenario-name>.json`, the full report |
+| `--format text\|json` | `json` prints the report to stdout instead of the text summary: one JSON object for one file, a JSON array of reports (in file order) for several; progress goes to stderr |
+| `--quiet` | no progress lines, only the summary |
+
+### Exit codes
+
+| Code | `run` | other commands |
+|---|---|---|
+| 0 | every scenario HELD | success |
+| 1 | at least one scenario VIOLATED | runtime failure (`probe`, `import`, `demo`) |
+| 2 | INCONCLUSIVE: at least half of the trials of a scenario could not be judged | - |
+| 3 | ERROR: invalid scenario, scope violation or setup failure before the first race | - |
+| 64 | usage error (unknown command, bad flag or argument) | usage error |
+
+With several scenarios `run` returns the most severe code: 3 before 1 before 2 before 0.
+
+A trial whose invariant evaluated to false over a clean race is VIOLATED. It is INCONCLUSIVE when the invariant
+could not be evaluated, a setup step answered an unexpected status, or the race was imperfect, whatever the
+invariant says: a race request failed or got no response, a response arrived before the release (the endpoint may
+be static, or the request was not held), or the race was rate limited. Failing terms of such a trial are listed as
+notes. Any 429 in the race counts as rate limiting, unless the scenario sets `race.expect_429: true` to declare 429s
+the application's own answer (a 2FA lockout, say); even then a 429 with `Retry-After` or a `RateLimit` header, or a
+race in which every response is 429, is rate limiting. A scenario is VIOLATED if any trial was.
+
+## Scenario format
+
+A short reference; [examples/](examples/) has complete files.
+
+```yaml
+version: 1
+name: coupon-applied-twice                # [a-z0-9-]+, names the report file
+target: https://shop.example.test/api     # request paths are appended to its path
+tls: { insecure: false }                  # true skips certificate verification
+scope:
+  allow_hosts: [shop.example.test]        # required; every request is checked before it is sent
+  budget: { requests: 600, rps: 50 }      # total cap for the run; rate of setup/check/reset steps
+identities:
+  alice: { headers: { Authorization: "Bearer ${env:ALICE_TOKEN}" } }
+vars: { code: WELCOME10 }
+setup:                                    # before every trial
+  - id: cart
+    as: alice
+    request: POST /carts
+    expect_status: [201]
+    extract: { cart_id: "$.id" }          # "$.json.path", "header:Name" or "status"
+race:
+  engine: auto                            # h2 | h1 | burst | auto
+  copies: 20                              # 1..1000
+  request:
+    as: alice
+    raw: |
+      POST /carts/{{cart_id}}/coupons HTTP/2
+      Content-Type: application/json
+
+      {"code":"{{code}}"}
+check:
+  as: alice
+  request: GET /carts/{{cart_id}}
+  invariant: >
+    size(check.json.discounts) <= 1 &&
+    size(race.filter(r, r.status == 200)) <= 1
+  explain: A single-use coupon must apply at most once per cart.
+reset: []                                 # optional steps after every trial
+trials: 10
+```
+
+| Key | Meaning |
+|---|---|
+| `target` | base URL; `/carts` under `https://host/api` becomes `https://host/api/carts` |
+| `scope.allow_hosts` | hosts compared to `host:port` case-insensitively; a bare host allows any port; anything else is refused before a connection is opened |
+| `scope.budget` | `requests` caps every request of the run, warm-up included (default 1000); when it runs out, the remaining trials are skipped. `rps` limits setup, check and reset steps, not the race (default 20) |
+| `identities` | named header sets chosen per step with `as`; their values are masked in reports |
+| `vars`, `{{name}}` | template variables; `extract` adds values from setup responses; an unknown name is an error. `{{"text"}}` writes text literally: `{{"{{"}}` is a literal `{{`, `{{"${env:"}}` a literal `${env:` (`import` escapes captured requests this way) |
+| `${env:NAME}` | read from the environment, masked in reports; a missing variable is an error |
+| `request` / `raw` | `METHOD /path`, or a full raw request: request line, headers, a blank line, the body. A `Host` header is ignored, the target decides; `json:` sets a JSON body |
+| `race.request` / `race.requests` | one request sent `copies` times, or a list of requests (multi-endpoint race) with their own `copies` |
+| `race.warmup`, `race.gate` | warm-up requests on the same connections before the race (default 0); pause between pre-send and release (default 100ms) |
+| `race.expect_429` | `true` declares 429s without `Retry-After` or `RateLimit` headers to be the application's answer, not rate limiting (default false: any 429 makes the trial INCONCLUSIVE) |
+| `check.invariant` | a [CEL](https://cel.dev) expression that must be true after the race |
+| `evidence.arrival_header` | response header with the server's arrival time in Unix ns (default `X-Arrival-Ns`, `-` disables) |
+
+The invariant sees `race` (the race responses in order), `check` (the check response), `setup` (the setup
+responses by step id) and `vars`. A response has `status`, `headers` (lowercase names), `body`, `json` (parsed
+body or null), and in `race` also `index` and `error`. The standard macros `filter`, `exists`, `all`, `map` and
+`size` are available. Every term of a top-level `&&` is evaluated on its own, so the report shows which part
+failed and with which values, for example `3 <= 1`.
+
+## Probe and import
+
+```bash
+./bin/photofinish probe https://127.0.0.1:8443/vuln/api/me --insecure
+./bin/photofinish import request.txt --output scenario.yaml    # raw request from Burp or DevTools
+./bin/photofinish import capture.har --har-entry 3             # one HAR entry, YAML to stdout
+```
+
+`probe` sends three GET requests and no race traffic. `import` writes a skeleton that deliberately fails
+validation until you write the check and the invariant; review the scope and budget, and move credentials to
+`${env:NAME}`.
+
+## The demo shop
 
 `photofinish demo` starts a small shop over HTTPS with HTTP/2. Each scenario exists twice, with independent
 in-memory SQLite state: `/vuln` checks in one statement and writes in another (a real check-then-act race), and
@@ -19,7 +209,7 @@ in-memory SQLite state: `/vuln` checks in one statement and writes in another (a
 | Scenario | Endpoint | `/vuln` (racy) | `/fixed` (atomic) | Invariant |
 |---|---|---|---|---|
 | Coupon | `POST /api/carts/{id}/coupons` | count the code on the cart, then insert the discount | insert guarded by `UNIQUE(cart_id, code)` | at most one discount per code and cart |
-| Transfer | `POST /api/transfers` | read the balance, then debit and credit | `UPDATE ... WHERE balance >= ?` in a transaction, affected rows checked | no balance below 0, total money constant |
+| Transfer | `POST /api/transfers` | read the balance, then debit and credit | `UPDATE ... WHERE balance >= ?` in a transaction, affected rows checked | the sender's balance never goes below 0 |
 | 2FA attempts | `POST /api/2fa/verify` | read the attempt counter, compare, then increment | `UPDATE ... WHERE attempts < 3`, affected rows checked | at most 3 codes compared |
 | Gift card | `POST /api/giftcards/{code}/redeem` | read `redeemed`, credit the balance, then mark it | `UPDATE ... WHERE redeemed = 0` in a transaction, affected rows checked | a card's value is credited once |
 
@@ -35,51 +225,17 @@ answers `{"status":"ok"}`.
 
 Demo users: `alice` (token `demo-alice`) and `bob` (token `demo-bob`), 100.00 each (money is integer cents), coupon
 `WELCOME10` (10 percent), gift cards `GIFT-ALICE-50` and `GIFT-BOB-50` (50.00 each), 2FA code `482913` with a limit of
-3 attempts.
-
-## Quick start
-
-Requires Go 1.27+. No CGO, no other services.
-
-```bash
-git clone https://github.com/TroubieD3v/PhotoFinish.git
-cd PhotoFinish
-go run ./cmd/photofinish demo --window 200ms
-```
-
-The shop prints its URL (`https://127.0.0.1:8443`), the SHA-256 fingerprint of its fresh self-signed certificate
-and the demo tokens. `--window` inserts an artificial pause between the check and the write in `/vuln` handlers so
-that the race is easy to hit by hand; without it the race is still real, just narrower.
+3 attempts. The examples write the demo tokens literally; real scenarios read secrets with `${env:NAME}`.
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `--addr` | `127.0.0.1:8443` | listen address; non-loopback addresses are refused without `--expose` |
-| `--window` | `0s` | artificial pause in `/vuln` handlers, up to `2s` |
+| `--window` | `0s` | artificial pause between the check and the write in `/vuln` handlers, up to `2s` |
 | `--expose` | off | allow a non-loopback address (isolated lab networks only) |
 | `--quiet` | off | do not log requests |
 
-In another terminal, apply the same coupon five times at once:
-
-```bash
-BASE=https://127.0.0.1:8443/vuln/api
-AUTH='Authorization: Bearer demo-alice'
-CART=$(curl -sk -X POST -H "$AUTH" "$BASE/carts" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
-for i in 1 2 3 4 5; do
-  curl -sk -o /dev/null -w '%{http_code}\n' -X POST -H "$AUTH" -H 'Content-Type: application/json' \
-    -d '{"code":"WELCOME10"}' "$BASE/carts/$CART/coupons" &
-done; wait
-curl -sk -H "$AUTH" "$BASE/carts/$CART"
-```
-
-On `/vuln` several requests answer `200` and the cart lists `WELCOME10` more than once, so `payable_cents` drops
-below 7290. Set `BASE=https://127.0.0.1:8443/fixed/api` and repeat: exactly one `200`, the others `409`, one
-discount. `curl -sk -X POST https://127.0.0.1:8443/vuln/api/reset` restores the seed state.
-
-Five background `curl` processes are the naive approach: separate connections, no synchronization. Sending all
-requests in one TCP packet is what the `h2` engine in M1 is for.
-
-Build a binary instead: `make build` (or `go build -o bin/photofinish ./cmd/photofinish`), then
-`./bin/photofinish demo`. `make test` runs `go vet` and the race-enabled tests.
+Without `--window` the race is real but narrow, which is the case the `h2` engine is built for. The integration
+tests run the examples with a 2ms window so that the result does not depend on a slow CI machine.
 
 ## Roadmap
 
@@ -88,10 +244,10 @@ The design, in Russian: [docs/DESIGN.ru.md](docs/DESIGN.ru.md).
 | Milestone | Delivers | Done when |
 |---|---|---|
 | **M0** | **repository, CI, the demo shop in two variants** | **`photofinish demo` starts, tests are green** |
-| M1 | engines `h2` (single-packet), `h1` (last-byte sync), `burst`; the `probe` command | `h2` reliably catches the coupon race on `/vuln`; a benchmark shows the difference between engines |
-| M2 | scenarios, CEL invariants, trials, verdicts, JSON evidence | `photofinish run examples/*.yaml` gives the right verdicts on `/vuln` and `/fixed` |
+| M1 (partly done) | engines `h2` (single-packet), `h1` (last-byte sync), `burst`; the `probe` command | `h2` reliably catches the coupon race on `/vuln` (done); a benchmark measures the arrival spread of `h2` against `h1` and `burst` (not written yet; on loopback the hit rates of the three engines are similar) |
+| **M2** | **scenarios, CEL invariants, trials, verdicts, JSON evidence** | **`photofinish run examples/*.yaml` gives the right verdicts on `/vuln` and `/fixed`** |
 | M3 | SARIF, JUnit, HTML, Docker, GitHub Action | the Action fails a build against `/vuln` in a test repository |
-| M4 | web UI (Scenarios, Editor, Run, Reports) | a scenario is built and run from the UI; the timeline shows the trials |
+| M4 | web UI (Scenarios, Editor, Run, Reports) and `photofinish serve` | a scenario is built and run from the UI; the timeline shows the trials |
 | M5 | EN/RU documentation, screenshots, GIF, release v0.1.0, article | the release is published, a race lab is in WebSec-Lab |
 
 Planned UI, the Run screen (a mockup, not implemented yet):
@@ -101,9 +257,10 @@ Planned UI, the Run screen (a mockup, not implemented yet):
 ## Responsible use
 
 PhotoFinish is for systems you own or are authorized to test. Race testing sends bursts of synchronized requests
-and can change real state: balances, orders, coupons, account lockouts. The demo shop is intentionally vulnerable:
-it binds to `127.0.0.1` by default, refuses other addresses unless you pass `--expose`, keeps its state in memory
-and uses throwaway tokens and a throwaway certificate.
+and can change real state: balances, orders, coupons, account lockouts. Every scenario must list the hosts it may
+contact, and a request budget caps the run. The demo shop is intentionally vulnerable: it binds to `127.0.0.1` by
+default, refuses other addresses unless you pass `--expose`, keeps its state in memory and uses throwaway tokens
+and a throwaway certificate.
 
 [SECURITY.md](SECURITY.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [CHANGELOG.md](CHANGELOG.md)
 

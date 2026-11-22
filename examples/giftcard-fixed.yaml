@@ -1,0 +1,42 @@
+# Gift card redeemed twice, against the atomic /fixed variant of the demo shop.
+#
+#   photofinish demo                              # terminal 1
+#   photofinish run examples/giftcard-fixed.yaml  # terminal 2: expect HELD (exit 0)
+#
+# The same race as giftcard-vuln.yaml. Here "UPDATE ... WHERE redeemed = 0"
+# and the credit share a transaction: one redemption answers 200, the others
+# 409 "gift card already redeemed".
+version: 1
+name: giftcard-fixed
+description: >
+  A gift card's value is credited once. Alice starts with 100.00, so after
+  twenty synchronized redemptions of a 50.00 card she has at most 150.00.
+target: https://127.0.0.1:8443/fixed/api
+tls:
+  insecure: true # the demo shop uses a fresh self-signed certificate
+scope:
+  allow_hosts: [127.0.0.1:8443]
+  budget: { requests: 1000, rps: 50 }
+identities:
+  # The demo's public throwaway token, written literally. Real scenarios read
+  # secrets from the environment: "Bearer ${env:ALICE_TOKEN}".
+  alice: { headers: { Authorization: "Bearer demo-alice" } }
+vars: { card: GIFT-ALICE-50 }
+setup:
+  - id: reset # restore the seed state: the card is unredeemed, alice has 100.00
+    request: POST /reset
+    expect_status: [200]
+race:
+  engine: auto
+  copies: 20
+  request:
+    as: alice
+    request: POST /giftcards/{{card}}/redeem
+check:
+  as: alice
+  request: GET /me
+  invariant: >
+    check.json.balance_cents <= 15000 &&
+    size(race.filter(r, r.status == 200)) <= 1
+  explain: A gift card's value must be credited exactly once.
+trials: 10

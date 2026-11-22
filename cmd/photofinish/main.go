@@ -1,5 +1,6 @@
-// Command photofinish is the PhotoFinish CLI. Milestone M0 ships the demo target:
-// a shop that is intentionally vulnerable to race conditions, with a fixed twin.
+// Command photofinish is the PhotoFinish CLI: it runs race scenarios against
+// web APIs, probes targets, imports requests into scenario skeletons and
+// serves the intentionally vulnerable demo shop.
 package main
 
 import (
@@ -21,21 +22,42 @@ import (
 // version is overridden at release time: -ldflags "-X main.version=v1.2.3"
 var version = "0.0.0-dev"
 
+// Exit codes shared by the commands. The run command returns the verdict codes
+// of runner.ExitCode instead: 0 HELD, 1 VIOLATED, 2 INCONCLUSIVE, 3 ERROR.
+const (
+	exitOK      = 0
+	exitFailure = 1  // runtime failure of demo, probe or import
+	exitUsage   = 64 // EX_USAGE: unknown command, bad flags or arguments
+)
+
 const usage = `PhotoFinish - proves race conditions in web APIs
 
 Usage:
+  photofinish run <scenario.yaml>... [--engine auto|h2|h1|burst] [--trials N] [--copies N]
+                                     [--insecure] [--out DIR] [--format text|json] [--quiet]
+  photofinish probe <url> [--insecure]
+  photofinish import <file> [--har-entry N] [--output scenario.yaml]
   photofinish demo [--addr 127.0.0.1:8443] [--window 0s] [--expose] [--quiet]
   photofinish version
   photofinish help
 
 Commands:
+  run       run scenarios: setup, a synchronized race and the invariant check,
+            once per trial; exits 0 HELD, 1 VIOLATED, 2 INCONCLUSIVE, 3 ERROR
+  probe     inspect a target (TLS, ALPN, HTTP/2 settings, round trips) and
+            recommend an engine; sends three GET requests, no race traffic
+  import    turn a raw HTTP request (Burp, DevTools) or a HAR file into a
+            scenario skeleton
   demo      start the demo shop over HTTPS with HTTP/2: every scenario exists as
             /vuln (check-then-act, intentionally racy) and /fixed (atomic)
   version   print the version
   help      show this text
 
-This is milestone M0, the demo target. The run, probe, import and serve
-commands arrive in later milestones; see docs/DESIGN.ru.md for the design.
+Run "photofinish <command> -h" for the flags of a command. Usage errors exit 64.
+Test only systems you own or are explicitly authorized to test.
+
+The serve command (web UI) arrives in milestone M4; see docs/DESIGN.ru.md for
+the design.
 `
 
 const demoUsage = `Usage: photofinish demo [--addr 127.0.0.1:8443] [--window 0s] [--expose] [--quiet]
@@ -50,31 +72,92 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-// run executes the CLI with args (without the program name) and returns the exit code:
-// 0 success, 1 runtime failure, 2 usage or validation error.
+// run executes the CLI with args (without the program name) and returns the
+// exit code: 0 success, 1 runtime failure, 64 usage error. The run command
+// returns verdict codes instead (see cmdRun).
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
-		return 2
+		return exitUsage
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
+	case "run":
+		return cmdRun(rest, stdout, stderr)
+	case "probe":
+		return cmdProbe(rest, stdout, stderr)
+	case "import":
+		return cmdImport(rest, stdout, stderr)
 	case "demo":
 		return cmdDemo(rest, stdout, stderr)
 	case "version", "--version":
 		fmt.Fprintln(stdout, "photofinish", version)
-		return 0
+		return exitOK
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
-		return 0
+		return exitOK
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", cmd, usage)
-		return 2
+		return exitUsage
 	}
 }
 
 // errReported marks a flag error that the flag package has already printed with the usage text.
 var errReported = errors.New("invalid flags")
+
+// flagExit maps the error returned by a command's flag parsing to an exit
+// code. done is false when err is nil and the command should go on; any
+// other error is a usage error, except -h, which exits 0.
+func flagExit(err error, stderr io.Writer) (code int, done bool) {
+	switch {
+	case err == nil:
+		return exitOK, false
+	case errors.Is(err, flag.ErrHelp):
+		return exitOK, true
+	case errors.Is(err, errReported):
+		return exitUsage, true
+	default:
+		fmt.Fprintln(stderr, "error:", err)
+		return exitUsage, true
+	}
+}
+
+// newFlagSet returns a flag set that reports problems on stderr and prints
+// help followed by the flag defaults.
+func newFlagSet(name, help string, stderr io.Writer) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.Usage = func() {
+		fmt.Fprint(fs.Output(), help)
+		fs.PrintDefaults()
+	}
+	return fs
+}
+
+// parseFlags parses args with fs and, unlike fs.Parse, accepts flags after
+// positional arguments, as in "run a.yaml b.yaml --trials 5". Everything after
+// "--" is positional. It returns the positional arguments in order. Flag
+// errors are wrapped in errReported because fs has already printed them.
+func parseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
+	var pos []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("%w: %w", errReported, err)
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			return pos, nil
+		}
+		if consumed := len(args) - len(rest); consumed > 0 && args[consumed-1] == "--" {
+			return append(pos, rest...), nil
+		}
+		pos = append(pos, rest[0])
+		args = rest[1:]
+	}
+}
 
 // demoOptions holds the parsed flags of the demo command.
 type demoOptions struct {
@@ -121,22 +204,16 @@ func parseDemo(args []string, stderr io.Writer) (demoOptions, error) {
 
 func cmdDemo(args []string, stdout, stderr io.Writer) int {
 	o, err := parseDemo(args, stderr)
-	switch {
-	case errors.Is(err, flag.ErrHelp):
-		return 0
-	case errors.Is(err, errReported):
-		return 2
-	case err != nil:
-		fmt.Fprintln(stderr, "error:", err)
-		return 2
+	if code, done := flagExit(err, stderr); done {
+		return code
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := runDemo(ctx, o, stdout, stderr, nil); err != nil {
 		fmt.Fprintln(stderr, "error:", err)
-		return 1
+		return exitFailure
 	}
-	return 0
+	return exitOK
 }
 
 // runDemo serves the demo shop until ctx is done. started, if non-nil, is called with the

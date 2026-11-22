@@ -41,21 +41,25 @@ func TestRunCommands(t *testing.T) {
 		stderr   string
 		noStdout bool
 	}{
-		{name: "no command", args: nil, want: 2, stderr: "Usage:", noStdout: true},
-		{name: "unknown command", args: []string{"race"}, want: 2, stderr: `unknown command "race"`, noStdout: true},
+		{name: "no command", args: nil, want: exitUsage, stderr: "Usage:", noStdout: true},
+		{name: "unknown command", args: []string{"race"}, want: exitUsage, stderr: `unknown command "race"`, noStdout: true},
 		{name: "help", args: []string{"help"}, want: 0, stdout: "docs/DESIGN.ru.md"},
-		{name: "--help", args: []string{"--help"}, want: 0, stdout: "run, probe, import and serve"},
+		{name: "--help", args: []string{"--help"}, want: 0, stdout: "The serve command (web UI) arrives in milestone M4"},
+		{name: "help lists commands", args: []string{"help"}, want: 0, stdout: "photofinish run <scenario.yaml>..."},
+		{name: "help lists probe", args: []string{"help"}, want: 0, stdout: "photofinish probe <url>"},
+		{name: "help lists import", args: []string{"help"}, want: 0, stdout: "photofinish import <file>"},
+		{name: "help states the usage exit code", args: []string{"help"}, want: 0, stdout: "Usage errors exit 64"},
 		{name: "version", args: []string{"version"}, want: 0, stdout: "photofinish " + version + "\n"},
 		{name: "--version", args: []string{"--version"}, want: 0, stdout: "photofinish " + version + "\n"},
 		{name: "demo -h", args: []string{"demo", "-h"}, want: 0, stderr: "--expose"},
-		{name: "demo unknown flag", args: []string{"demo", "--fast"}, want: 2, stderr: "flag provided but not defined: -fast"},
-		{name: "demo positional argument", args: []string{"demo", "extra"}, want: 2, stderr: `unexpected argument "extra"`},
-		{name: "demo bad window", args: []string{"demo", "--window", "soon"}, want: 2, stderr: "--window"},
-		{name: "demo negative window", args: []string{"demo", "--window", "-1ms"}, want: 2, stderr: "between 0s and 2s"},
-		{name: "demo window too large", args: []string{"demo", "--window", "3s"}, want: 2, stderr: "between 0s and 2s"},
-		{name: "demo address without port", args: []string{"demo", "--addr", "127.0.0.1"}, want: 2, stderr: "--addr"},
-		{name: "demo non-loopback address", args: []string{"demo", "--addr", "0.0.0.0:8443"}, want: 2, stderr: "intentionally vulnerable"},
-		{name: "demo public address", args: []string{"demo", "--addr", "192.0.2.10:8443", "--window", "5ms"}, want: 2, stderr: "--expose"},
+		{name: "demo unknown flag", args: []string{"demo", "--fast"}, want: exitUsage, stderr: "flag provided but not defined: -fast"},
+		{name: "demo positional argument", args: []string{"demo", "extra"}, want: exitUsage, stderr: `unexpected argument "extra"`},
+		{name: "demo bad window", args: []string{"demo", "--window", "soon"}, want: exitUsage, stderr: "--window"},
+		{name: "demo negative window", args: []string{"demo", "--window", "-1ms"}, want: exitUsage, stderr: "between 0s and 2s"},
+		{name: "demo window too large", args: []string{"demo", "--window", "3s"}, want: exitUsage, stderr: "between 0s and 2s"},
+		{name: "demo address without port", args: []string{"demo", "--addr", "127.0.0.1"}, want: exitUsage, stderr: "--addr"},
+		{name: "demo non-loopback address", args: []string{"demo", "--addr", "0.0.0.0:8443"}, want: exitUsage, stderr: "intentionally vulnerable"},
+		{name: "demo public address", args: []string{"demo", "--addr", "192.0.2.10:8443", "--window", "5ms"}, want: exitUsage, stderr: "--expose"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
