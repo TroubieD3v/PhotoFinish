@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then echo "gofmt needed on:"; echo "$unformatted"; exit 1; fi
+      - run: go vet ./...
+      - run: go test -race ./...
+      - run: go build -o photofinish ./cmd/photofinish
+
+      # The README's quick start: start the demo shop, check that it speaks HTTP/2 over TLS,
+      # and that the fixed coupon endpoint refuses a second application of the same code.
+      - name: Demo smoke test
+        run: |
+          ./photofinish demo --addr 127.0.0.1:18443 --quiet > demo.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          base=https://127.0.0.1:18443
+          for i in $(seq 1 30); do curl -fsSk --http2 "$base/healthz" && break; sleep 1; done
+          curl -fsSk --http2 -o /dev/null "$base/healthz" || { cat demo.log; exit 1; }
+          proto=$(curl -sk --http2 -o /dev/null -w '%{http_version}' "$base/healthz")
+          if [ "$proto" != "2" ]; then echo "expected HTTP/2, got $proto"; exit 1; fi
+          auth='Authorization: Bearer demo-alice'
+          cart=$(curl -fsSk --http2 -X POST -H "$auth" "$base/fixed/api/carts" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+          if [ -z "$cart" ]; then echo "no cart id"; cat demo.log; exit 1; fi
+          apply() {
+            curl -sk --http2 -o /dev/null -w '%{http_code}' -X POST -H "$auth" \
+              -H 'Content-Type: application/json' -d '{"code":"WELCOME10"}' "$base/fixed/api/carts/$cart/coupons"
+          }
+          first=$(apply)
+          second=$(apply)
+          echo "coupon on /fixed: first apply $first, second apply $second"
+          if [ "$first" != "200" ] || [ "$second" != "409" ]; then cat demo.log; exit 1; fi
+          kill "$pid"
