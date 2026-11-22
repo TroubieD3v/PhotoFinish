@@ -1,6 +1,6 @@
 //go:build windows
 
-package demo
+package clock
 
 import (
 	"syscall"
@@ -20,7 +20,7 @@ var (
 func queryFrequency() int64 {
 	var f int64
 	if r, _, _ := procQPF.Call(uintptr(unsafe.Pointer(&f))); r == 0 || f <= 0 {
-		panic("demo: QueryPerformanceFrequency failed")
+		panic("clock: QueryPerformanceFrequency failed")
 	}
 	return f
 }

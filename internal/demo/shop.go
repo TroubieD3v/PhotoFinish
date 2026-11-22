@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/TroubieD3v/photofinish/internal/clock"
 	"io"
 	"log"
 	"net/http"
@@ -181,7 +182,7 @@ type frontHandler struct {
 }
 
 func (h *frontHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	arrivalNs := arrivalNanos()
+	arrivalNs := clock.UnixNano()
 	arrival := time.Now()
 	// A non-canonical path (dot segments, repeated slashes) is answered with
 	// a JSON 404 instead of the mux's redirect to the cleaned path: that

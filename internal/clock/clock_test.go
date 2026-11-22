@@ -1,21 +1,21 @@
-package demo
+package clock
 
 import (
 	"testing"
 	"time"
 )
 
-// TestArrivalClockResolution guards the reason arrivalNanos exists: two reads
+// TestArrivalClockResolution guards the reason UnixNano exists: two reads
 // a few microseconds apart must differ. A clock that only advances every tens
 // of microseconds (the Windows wall clock) fails this test.
 func TestArrivalClockResolution(t *testing.T) {
 	smallest := int64(1 << 62)
 	deadline := time.Now().Add(2 * time.Second)
 	for i := 0; i < 200 && time.Now().Before(deadline); i++ {
-		a := arrivalNanos()
-		b := arrivalNanos()
+		a := UnixNano()
+		b := UnixNano()
 		for b == a {
-			b = arrivalNanos()
+			b = UnixNano()
 		}
 		if d := b - a; d < smallest {
 			smallest = d
@@ -29,12 +29,12 @@ func TestArrivalClockResolution(t *testing.T) {
 // TestArrivalClockTracksWallClock checks that values stay Unix nanoseconds:
 // close to time.Now and never going backwards.
 func TestArrivalClockTracksWallClock(t *testing.T) {
-	if diff := arrivalNanos() - time.Now().UnixNano(); diff > int64(50*time.Millisecond) || diff < -int64(50*time.Millisecond) {
+	if diff := UnixNano() - time.Now().UnixNano(); diff > int64(50*time.Millisecond) || diff < -int64(50*time.Millisecond) {
 		t.Fatalf("arrival clock is %s away from the wall clock", time.Duration(diff))
 	}
-	prev := arrivalNanos()
+	prev := UnixNano()
 	for i := 0; i < 10000; i++ {
-		now := arrivalNanos()
+		now := UnixNano()
 		if now < prev {
 			t.Fatalf("arrival clock went backwards: %d after %d", now, prev)
 		}
