@@ -392,17 +392,34 @@ function LiveRun({
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
+  const parts = value.split(" · ");
+  if (parts.length === 1) {
+    return (
+      <div className="metric">
+        <div className="label">{label}</div>
+        <div className="value">{value}</div>
+      </div>
+    );
+  }
+  // A narrow cell wraps the value between its parts only, and a line never
+  // starts or ends with the separator (see .metric .value.parts).
   return (
     <div className="metric">
       <div className="label">{label}</div>
-      <div className="value">
-        {/* A narrow cell wraps the value between its parts only. */}
-        {value.split(" · ").map((part, i) => (
-          <Fragment key={i}>
-            {i > 0 && " · "}
-            <span className="nowrap">{part}</span>
-          </Fragment>
-        ))}
+      <div className="value parts">
+        <span>
+          {parts.map((part, i) => (
+            <Fragment key={i}>
+              {i > 0 && " "}
+              <span className="nowrap">
+                <span className="sep" aria-hidden={i === 0 || undefined}>
+                  {i > 0 ? "·" : ""}
+                </span>
+                {part}
+              </span>
+            </Fragment>
+          ))}
+        </span>
       </div>
     </div>
   );

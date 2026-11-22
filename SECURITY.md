@@ -1,5 +1,14 @@
 # Security policy
 
+## Supported versions
+
+| Version | Supported |
+|---|---|
+| 0.1.x | yes |
+| builds from before v0.1.0 | no |
+
+Fixes are released as a new 0.1.x patch release. Before 1.0 only the newest minor version gets fixes.
+
 ## Reporting a vulnerability in PhotoFinish
 
 Please do not open a public issue for security problems in PhotoFinish itself. Use GitHub's private vulnerability

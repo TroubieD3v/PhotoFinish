@@ -5,7 +5,10 @@
 PhotoFinish proves race conditions in web APIs: synchronized requests via the HTTP/2 single-packet attack, a
 business rule you declare, and the evidence.
 
-Pre-alpha: M1-M4 — engines, scenarios, verdicts, reports, CI integration and the web UI work; the first release arrives with M5.
+![The web UI runs coupon-vuln against the demo shop: the trials arrive one by one, and the verdict is VIOLATED with the timeline of a race](docs/demo.gif)
+
+Status: v0.1.0, the first release. It is still early: the command-line flags, the API of `photofinish serve` and the
+scenario format may change before 1.0. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 > **Note**: test only systems you own or are explicitly authorized to test. The demo shop in this repository is
 > intentionally vulnerable and listens on loopback only. See [SECURITY.md](SECURITY.md).
@@ -29,7 +32,75 @@ The engines:
 | `burst` | plain concurrent requests without synchronization, the baseline the other two are compared to |
 | `auto` | `h2` if the server negotiates it via ALPN, else `h1` |
 
-## Quick start
+## How well does it work
+
+[BENCHMARKS.md](BENCHMARKS.md) runs every example with every engine against the demo shop on a GitHub Actions
+runner: 30 trials of 20 copies, on plain loopback and with 1 ms ± 0.5 ms and 5 ms ± 2 ms of added delay (`tc netem`).
+
+- With 5 ms ± 2 ms of jitter, the median server arrival spread of a race was 0.08–0.21 ms with `h2` and
+  6.05–7.43 ms with `h1`.
+- At 5 ms, `h2` broke the rule of the vulnerable variants in 7 to 29 of 30 trials, `h1` in 0 to 4.
+- The fixed variants were HELD in all 1,080 trials: no false positive.
+
+A tight arrival is necessary, not sufficient: whether the requests interleave inside the race window depends on the
+server. At 5 ms of jitter, `burst` caught the coupon race more often than `h2` (14 against 7 of 30). The numbers
+describe the demo shop on one machine; compare the engines on your own target.
+
+## Install
+
+### Release archives
+
+The [Releases page](https://github.com/TroubieD3v/PhotoFinish/releases) has one archive per platform:
+
+| Platform | Archive |
+|---|---|
+| Linux x86-64 | `photofinish_v0.1.0_linux_amd64.tar.gz` |
+| Linux ARM64 | `photofinish_v0.1.0_linux_arm64.tar.gz` |
+| macOS Intel | `photofinish_v0.1.0_darwin_amd64.tar.gz` |
+| macOS Apple silicon | `photofinish_v0.1.0_darwin_arm64.tar.gz` |
+| Windows x86-64 | `photofinish_v0.1.0_windows_amd64.zip` |
+
+Each archive holds a directory of the same name with one static binary (`photofinish`, or `photofinish.exe` on
+Windows) with the web UI embedded, `README.md`, `README.ru.md` and `LICENSE`. `checksums.txt` lists the SHA-256 of
+every archive:
+
+```bash
+sha256sum --check --ignore-missing checksums.txt     # macOS: shasum -a 256 <archive>, compare with checksums.txt
+tar -xzf photofinish_v0.1.0_linux_amd64.tar.gz
+./photofinish_v0.1.0_linux_amd64/photofinish version  # photofinish v0.1.0
+```
+
+The binaries are not signed. If macOS refuses to start a binary downloaded with a browser, remove the quarantine
+attribute from the extracted directory: `xattr -dr com.apple.quarantine photofinish_v0.1.0_darwin_arm64`
+(`darwin_amd64` on Intel).
+
+The archives do not contain the example scenarios. Take them from [examples/](examples/), or copy them into a
+workspace from the Scenarios screen of the web UI.
+
+### go install
+
+```bash
+go install github.com/TroubieD3v/photofinish/cmd/photofinish@latest
+```
+
+This needs Go 1.27+ and puts the binary into `$(go env GOPATH)/bin` (or `GOBIN`); `photofinish version` reports
+the module version, e.g. `v0.1.0`. Such a binary has no web UI: the UI is built into `internal/ui/dist/app` at
+release time, and that directory is not in the repository, so the module that `go install` downloads does not
+contain it. `run`, `probe`, `import` and `demo` work as usual. `serve` starts and the API works, but it prints a note
+that the web UI was not built into this binary, and the browser gets a page that says so. For the UI, use a release
+archive, the Docker image or a build from source with `make ui`.
+
+### Docker image
+
+```bash
+docker pull ghcr.io/troubied3v/photofinish:0.1.0
+```
+
+The image is built for linux/amd64 and linux/arm64 and contains the web UI. A release without a suffix is tagged
+`X.Y.Z`, `X.Y` and `latest` (here `0.1.0`, `0.1` and `latest`), a prerelease only `X.Y.Z`. `latest` is the release
+without a suffix that was published last. See [Docker](#docker).
+
+### From source
 
 Requires Go 1.27+. The binary needs no CGO and no other services.
 
@@ -45,6 +116,9 @@ The web UI is a separate build step that needs Node.js 22: `make ui` (`npm --pre
 `npm --prefix web run build`) writes it to `internal/ui/dist/app`, and the next `make build` embeds it into the
 binary. Everything else works without it; a binary built without the UI answers `photofinish serve` with a page that
 says so. The release archives and the Docker image always contain the UI.
+
+The commands below use `./bin/photofinish` from a source build and the files in `examples/`; with a release archive
+or `go install`, call your `photofinish` instead.
 
 ## Run a race
 
@@ -194,7 +268,7 @@ the trials table, the timeline of the first violated trial (one row per request:
 byte; the server arrival times when the target sends them), the invariant with pass or fail per term, the check
 response and the reproduce command.
 
-*A screenshot of the HTML report follows in M5.*
+![The HTML report of coupon-vuln: the verdict strip, the trials table, the timeline of trial 1 with the server arrival strip, the invariant with its failing terms and the check response](docs/report-html.png)
 
 All formats are built from the same report, so secrets are masked in all of them, but response bodies are included.
 Review a report before you share it, see [SECURITY.md](SECURITY.md).
@@ -212,7 +286,9 @@ PhotoFinish UI: http://127.0.0.1:7340/#token=<token>
 
 Open the printed link. `serve` works on the scenario files of a workspace directory (the current directory by
 default) and keeps a history of runs; `--demo` also starts the demo shop on `https://127.0.0.1:8443` (see
-`--demo-addr`), so the examples can be copied into the workspace and run right away.
+`--demo-addr`), so the examples can be copied into the workspace and run right away. `make ui` is needed only for a
+source build: the binaries of the release archives and the Docker image contain the UI, a binary from `go install`
+does not (see [Install](#install)).
 
 | Screen | Does |
 |---|---|
@@ -226,7 +302,14 @@ default) and keeps a history of runs; `--demo` also starts the demo shop on `htt
 The sidebar starts and stops the demo shop and shows the workspace path. The UI has a graphite dark theme and a
 light one (from `prefers-color-scheme`, or the toggle), and works with the keyboard.
 
-*Screenshots of the Scenarios, Editor and Run screens follow in M5.*
+![Scenarios: the scenario files of the workspace with their last verdict, and the examples for the demo shop](docs/screenshots/scenarios.png)
+
+![Editor: the YAML of a scenario with live validation, the parsed summary and the run options](docs/screenshots/editor.png)
+
+![Run: the verdict strip, the trials table, the timeline of the selected trial and the evaluated invariant](docs/screenshots/run.png)
+
+The other screens: [Runs](docs/screenshots/runs.png), [Probe](docs/screenshots/probe.png),
+[Import](docs/screenshots/import.png), and [Run in the light theme](docs/screenshots/run-light.png).
 
 | Flag | Default | Meaning |
 |---|---|---|
@@ -328,10 +411,12 @@ jobs:
             photofinish-junit.xml
 ```
 
-The tag `v0` exists from the release v0.1.0 on and follows the newest v0.x.y release (the release workflow moves it);
-until then use `@main` or a commit SHA. The `security-events: write`
-permission and the `upload-sarif` step are only needed if you want alerts; on a private repository `upload-sarif`
-also needs `actions: read`.
+The tag `v0` follows the newest v0.x.y release; the release workflow moves it. For a fixed version, pin
+`@v0.1.0` or a commit SHA. The action installs PhotoFinish with `go install` at the ref it is used at, unless the
+`version` input names another one: `@v0` installs the newest v0.x.y release, `@v0.1.0` that release. The installed
+binary reports the module version (`v0.1.0`) and has no web UI, which the action does not need. The
+`security-events: write` permission and the `upload-sarif` step are only needed if you want alerts; on a private
+repository `upload-sarif` also needs `actions: read`.
 
 | Input | Default | Meaning |
 |---|---|---|
@@ -361,8 +446,9 @@ non-zero on VIOLATED and leaves `reports/junit.xml` for the test view.
 
 ## Docker
 
-The image `ghcr.io/troubied3v/photofinish` (linux/amd64 and linux/arm64, published with every release from v0.1.0
-on) is distroless and runs as a non-root user; its entrypoint is `photofinish` and its working directory `/work`:
+The image `ghcr.io/troubied3v/photofinish` (linux/amd64 and linux/arm64, tagged `0.1.0`, `0.1` and `latest`) is
+distroless and runs as a non-root user; its entrypoint is `photofinish` and its working directory `/work`. The
+commands below use `latest`; add `:0.1.0` to pin the version:
 
 ```bash
 docker run --rm -v "$PWD:/work" ghcr.io/troubied3v/photofinish run scenario.yaml
@@ -474,7 +560,7 @@ in-memory SQLite state: `/vuln` checks in one statement and writes in another (a
 | Scenario | Endpoint | `/vuln` (racy) | `/fixed` (atomic) | Invariant |
 |---|---|---|---|---|
 | Coupon | `POST /api/carts/{id}/coupons` | count the code on the cart, then insert the discount | insert guarded by `UNIQUE(cart_id, code)` | at most one discount per code and cart |
-| Transfer | `POST /api/transfers` | read the balance, then debit and credit | `UPDATE ... WHERE balance >= ?` in a transaction, affected rows checked | the sender's balance never goes below 0 |
+| Transfer | `POST /api/transfers` | read the balance, then debit and credit | `UPDATE ... WHERE balance_cents >= ?` in a transaction, affected rows checked | the sender's balance never goes below 0 |
 | 2FA attempts | `POST /api/2fa/verify` | read the attempt counter, compare, then increment | `UPDATE ... WHERE attempts < 3`, affected rows checked | at most 3 codes compared |
 | Gift card | `POST /api/giftcards/{code}/redeem` | read `redeemed`, credit the balance, then mark it | `UPDATE ... WHERE redeemed = 0` in a transaction, affected rows checked | a card's value is credited once |
 
@@ -513,10 +599,11 @@ The design, in Russian: [docs/DESIGN.ru.md](docs/DESIGN.ru.md).
 | **M2** | **scenarios, CEL invariants, trials, verdicts, JSON evidence** | **`photofinish run examples/*.yaml` gives the right verdicts on `/vuln` and `/fixed`** |
 | **M3** | **SARIF, JUnit, HTML, Docker, GitHub Action** | **the Action fails a build against `/vuln` (the `action` job in CI)** |
 | **M4** | **web UI (Scenarios, Editor, Run, Runs, Probe, Import) and `photofinish serve`** | **a scenario is built and run from the UI; the timeline shows the trials (the `web` job in CI)** |
-| M5 | EN/RU documentation, screenshots, GIF, release v0.1.0, article | the release is published, a race lab is in WebSec-Lab |
+| **M5** | **EN/RU documentation, screenshots, GIF, release v0.1.0** | **the release is published** |
+| Later | an article; a race lab in WebSec-Lab | - |
 
-The Run screen follows the mockup [docs/mockup-run.png](docs/mockup-run.png); screenshots of the real UI follow
-in M5.
+The Run screen follows the mockup [docs/mockup-run.png](docs/mockup-run.png); screenshots of the real UI are in
+[docs/screenshots/](docs/screenshots/).
 
 ## Responsible use
 

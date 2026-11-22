@@ -71,11 +71,16 @@ SQLite errors must never reach a client: answer `500 {"error":"internal error"}`
 
 ## Releasing
 
-1. Add a section `## [X.Y.Z]` to `CHANGELOG.md` (the release notes come from it; without it the release fails).
-2. Tag the commit `vX.Y.Z` (or `vX.Y.Z-rc.1` for a prerelease) and push the tag. Only tags of that form start
-   `.github/workflows/release.yml`.
-3. The workflow builds the web UI, tests, builds the five archives (with the UI embedded) and `checksums.txt`,
-   smoke-tests the Linux binary against the demo and its `serve` for the embedded UI,
-   publishes the release and the image `ghcr.io/troubied3v/photofinish`, and moves the major tag (`v0`) that
-   `uses: TroubieD3v/PhotoFinish@v0` follows to the new release. Prereleases and patches of an older minor version
-   leave the major tag alone. Do not push the major tag by hand.
+1. Move the entries under `## [Unreleased]` in `CHANGELOG.md` into a new section `## [X.Y.Z] - YYYY-MM-DD` below
+   it, and keep an empty `## [Unreleased]` on top. The release notes are this section, from its heading to the next
+   `## ` heading; without it the release fails.
+2. Merge that to `main`, tag the commit on `main` `vX.Y.Z` (or `vX.Y.Z-rc.1` for a prerelease) and push the tag.
+   Only tags of that form start `.github/workflows/release.yml`.
+3. The workflow builds the web UI, runs the tests, builds the five archives `photofinish_vX.Y.Z_<os>_<arch>` (with
+   the UI embedded; `.zip` for Windows, `.tar.gz` for the rest) and `checksums.txt`, smoke-tests the Linux binary
+   against the demo and its `serve` for the embedded UI, and publishes the release. A tag with a suffix is marked
+   as a prerelease.
+4. It moves the major tag (`v0`) that `uses: TroubieD3v/PhotoFinish@v0` follows to the new release. Prereleases
+   and patches of an older minor version leave it alone. Do not push the major tag by hand.
+5. A second job pushes the image `ghcr.io/troubied3v/photofinish` (linux/amd64 and linux/arm64) with the tag
+   `X.Y.Z`, and for a release without a suffix also `X.Y` and `latest`, then checks that the pushed image runs.

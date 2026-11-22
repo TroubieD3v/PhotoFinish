@@ -109,6 +109,27 @@ test("runs coupon-vuln: VIOLATED with a timeline and failing terms", async () =>
   await expect(page.getByTestId("terms").locator('tr[data-state="fail"]').first()).toBeVisible();
   await expect(page.getByTestId("reproduce")).toContainText("photofinish run examples/coupon-vuln.yaml");
 
+  // "1 write · 200 B" wraps between its parts in a narrow cell, and the
+  // separator shows only between two parts on the same line.
+  const release = page.locator(".metric", { has: page.locator(".label", { hasText: "Release" }) }).locator(".value");
+  await expect(release).toContainText("200 B");
+  const misplaced = await release.evaluate((value) => {
+    const left = value.getBoundingClientRect().left;
+    const parts = Array.from(value.querySelectorAll(":scope > span > .nowrap"));
+    const bad: number[] = [];
+    parts.forEach((part, i) => {
+      if (i === 0) return;
+      const sep = part.querySelector(".sep")!.getBoundingClientRect();
+      const sameLine = Math.abs(parts[i - 1].getBoundingClientRect().top - sep.top) < 1;
+      const shown = sep.right > left + 0.5;
+      if (sameLine !== shown) bad.push(i);
+    });
+    // A separator left of the cell is hidden only because the cell clips it.
+    if (getComputedStyle(value).overflowX !== "hidden") bad.push(-2);
+    return parts.length > 1 ? bad : [-1];
+  });
+  expect(misplaced).toEqual([]);
+
   // Hovering a request shows its exact timings.
   await rows.nth(0).hover();
   await expect(page.getByRole("tooltip")).toContainText("First byte");

@@ -8,7 +8,7 @@ import { E2E_TOKEN } from "./e2e/constants";
 // The e2e tests drive the prebuilt binary (API, embedded UI and the demo
 // shop); nothing is built here. Build first:
 //
-//   npm --prefix web run build && go build -o bin/photofinish ./cmd/photofinish
+//   npm --prefix web run build && go build -o bin/photofinish$(go env GOEXE) ./cmd/photofinish
 //
 // PF_E2E_BIN overrides the binary, PF_E2E_PORT the UI port. The examples
 // target the demo shop on 127.0.0.1:8443, so that port must be free. The

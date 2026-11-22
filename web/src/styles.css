@@ -951,6 +951,10 @@ textarea.input {
   border: 1px solid var(--line);
   border-radius: 3px;
 }
+/* An expression that wraps keeps at least two words on its last line. */
+.code {
+  text-wrap-style: pretty;
+}
 .code .comment {
   color: var(--muted);
 }
@@ -1287,6 +1291,8 @@ ul.plain li {
 .summary {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  /* No lone word such as "ms)" on the last line. */
+  text-wrap-style: pretty;
 }
 .label-inline {
   color: var(--muted);
@@ -1300,6 +1306,20 @@ ul.plain li {
   font-family: var(--mono);
   font-size: 14px;
   white-space: nowrap;
+}
+/* A value of several parts ("1 write · 200 B") wraps between them. Every
+   part starts with a separator 2ch wide; the parts are shifted 2ch to the
+   left and clipped, so a separator at the start of a line is not shown. */
+.metric .value.parts {
+  overflow: hidden;
+}
+.metric .value.parts > span {
+  display: block;
+  margin-left: -2ch;
+}
+.metric .sep {
+  display: inline-block;
+  width: 2ch;
 }
 .progress-wrap {
   display: grid;

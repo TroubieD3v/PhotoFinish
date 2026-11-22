@@ -29,3 +29,9 @@ web/playwright-report
 web/blob-report
 web/.vite
 internal/ui/dist/app
+
+# Media for the README and the scripts that make it; the image needs neither.
+web/media
+docs/*.gif
+docs/*.png
+docs/screenshots
